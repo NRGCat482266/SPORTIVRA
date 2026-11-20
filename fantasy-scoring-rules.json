@@ -1,0 +1,10 @@
+{
+  "version": "2.6",
+  "applies_to": "all leagues with verified player-level statistics",
+  "rules": "see assets/fantasy26-scoring.js",
+  "status": "engine implemented, live feed not connected",
+  "languages": [
+    "pl",
+    "en"
+  ]
+}
