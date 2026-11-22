@@ -1,6 +1,6 @@
 /* SPORTIVRA calendar: server-side paging on fz26_fixtures (the same IDs as tickets). */
 (()=>{'use strict';
- const state={mode:'week',day:new Date(),search:'',sport:'',country:'',tier:'',league:'',status:'all',page:0,total:0,rows:[],sports:[],countries:[],leagues:[],days:{},error:'',loading:false};
+ const state={mode:'week',day:new Date(),search:'',sport:'',country:'',tier:'',league:'',status:'all',page:0,total:0,rows:[],sports:[],countries:[],leagues:[],leagueCatalog:[],days:{},error:'',loading:false};
  let generation=0,timer=null,searchTimer=null,channel=null,currentRoot=null;
  const localDay=d=>{const x=new Date(d);return new Date(x.getFullYear(),x.getMonth(),x.getDate())};
  const dateInput=d=>{const x=localDay(d);return `${x.getFullYear()}-${String(x.getMonth()+1).padStart(2,'0')}-${String(x.getDate()).padStart(2,'0')}`};
@@ -27,7 +27,8 @@
   filters.append(select('Sport',state.sport,state.sports,'Wszystkie sporty',v=>{state.sport=v;state.country='';state.tier='';state.league='';state.page=0;load()}));
   filters.append(select('Kraj',state.country,state.countries,'Wszystkie kraje',v=>{state.country=v;state.tier='';state.league='';state.page=0;load()}));
   const tier=el('select');tier.setAttribute('aria-label','Poziom ligi');tier.append(option('','Wszystkie poziomy'),option('1','Liga 1'),option('2','Liga 2'),option('3','Liga 3'));tier.value=state.tier;tier.addEventListener('change',()=>{state.tier=tier.value;state.league='';state.page=0;load()});filters.append(tier);
-  filters.append(select('Liga',state.league,state.leagues,'Wszystkie ligi',v=>{state.league=v;state.page=0;load()}));
+  const visibleLeagues=state.tier?state.leagueCatalog.filter(x=>String(x?.tier)===state.tier).map(x=>x.league):state.leagues;
+  filters.append(select('Liga',state.league,visibleLeagues,'Wszystkie ligi',v=>{state.league=v;state.page=0;load()}));
   const status=el('select');status.setAttribute('aria-label','Status');status.append(option('all','Wszystkie statusy'));for(const [key,value] of Object.entries(statuses))status.append(option(key,value));status.value=state.status;status.addEventListener('change',()=>{state.status=status.value;state.page=0;load()});filters.append(status);root.append(filters);
   const info=el('p',state.loading?'Ładowanie meczów…':state.error||`Znaleziono meczów: ${state.total}.`,'muted');info.setAttribute('role','status');root.append(info);
   if(!state.loading&&!state.error&&state.mode!=='day')drawGrid(root);const container=el('div',null,'sv27-cal-list');root.append(container);drawList(container);
@@ -49,7 +50,7 @@
   try{const {start,end}=span();const args={p_start:start.toISOString(),p_end:end.toISOString(),p_sport:state.sport||null,p_country:state.country||null,p_league:state.league||null,p_search:state.search.trim()||null,p_status:state.status,p_page:state.page,p_tz:Intl.DateTimeFormat().resolvedOptions().timeZone||'UTC'};
    if(typeof db.rpc!=='function')throw Error('Terminarz wymaga aktualnej migracji bazy (30_CALENDAR_SEARCH.sql).');
    const {data,error}=await db.rpc('sv27_calendar_search',args);if(error)throw error;if(token!==generation)return;
-   if(!data||!Array.isArray(data.rows))throw Error('Serwer zwrócił nieprawidłowe dane.');state.rows=state.tier?data.rows.filter(match=>leagueTier(match)===state.tier):data.rows;state.total=state.tier?state.rows.length:(Number(data.total)||0);state.sports=Array.isArray(data.sports)?data.sports:[];state.countries=Array.isArray(data.countries)?data.countries:[];state.leagues=Array.isArray(data.leagues)?data.leagues:[];state.days=data.days&&typeof data.days==='object'?data.days:{};state.error='';
+   if(!data||!Array.isArray(data.rows))throw Error('Serwer zwrócił nieprawidłowe dane.');state.rows=state.tier?data.rows.filter(match=>leagueTier(match)===state.tier):data.rows;state.total=state.tier?state.rows.length:(Number(data.total)||0);state.sports=Array.isArray(data.sports)?data.sports:[];state.countries=Array.isArray(data.countries)?data.countries:[];state.leagues=Array.isArray(data.leagues)?data.leagues:[];state.leagueCatalog=Array.isArray(data.league_catalog)?data.league_catalog:[];state.days=data.days&&typeof data.days==='object'?data.days:{};state.error='';
   }catch(e){if(token!==generation)return;state.rows=[];state.total=0;state.error='Nie udało się pobrać terminarza: '+(e?.message||String(e))+'. Dotychczasowy terminarz jest dostępny poniżej.'}state.loading=false;display()
  }
  const css=document.createElement('style');css.textContent='.sv27-cal-row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:10px 0}.sv27-cal-row input,.sv27-cal-row select{width:auto;min-width:160px;max-width:100%;margin:0}.sv27-cal-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:5px;overflow-x:auto}.sv27-cal-grid button{min-width:0;overflow-wrap:anywhere;font-size:12px;padding:8px 2px}.sv27-cal-outside{opacity:.55}.sv27-match{border:1px solid var(--border);border-radius:10px;margin:8px 0;padding:12px;overflow-wrap:anywhere}.sv27-match summary{cursor:pointer}.sv27-cal-logo{width:22px;height:22px;object-fit:contain;vertical-align:middle;margin:0 5px}@media(max-width:550px){.sv27-cal-grid button{font-size:10px;padding:6px 1px}.sv27-cal-row input,.sv27-cal-row select{flex:1;min-width:130px}}';document.head.append(css);
