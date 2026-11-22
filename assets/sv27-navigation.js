@@ -24,8 +24,14 @@
   });
  };
  if(player){
+  if(typeof PAGES!=='undefined'&&Array.isArray(PAGES)&&!PAGES.includes('🎪 Eventy'))PAGES.push('🎪 Eventy');
   const prior=renderPlayer;
   renderPlayer=function(){
+   if(active==='🎪 Eventy'){
+    tabs(PAGES,renderPlayer);
+    if(globalThis.SV27Events?.open)globalThis.SV27Events.open();
+    return;
+   }
    const result=prior.apply(this,arguments);
    const view=document.getElementById('view');if(!view)return result;
    const entry=groups[active];const parent=parentFor[active];
