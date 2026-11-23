@@ -1,17 +1,34 @@
-/* SPORTIVRA calendar: server-side paging on fz26_fixtures (the same IDs as tickets). */
+/* SPORTIVRA fixtures retain their ticket IDs. Public schedules are informational. */
 (()=>{'use strict';
- const state={mode:'week',day:new Date(),search:'',sport:'',country:'',tier:'',league:'',status:'all',page:0,total:0,rows:[],sports:[],countries:[],leagues:[],leagueCatalog:[],days:{},error:'',loading:false};
+ const state={mode:'week',day:new Date(),search:'',sport:'',country:'',tier:'',league:'',status:'all',page:0,total:0,rows:[],sports:[],countries:[],leagues:[],days:{},error:'',loading:false};
  let generation=0,timer=null,searchTimer=null,channel=null,currentRoot=null;
+ let pending=false,source='auto',rangeOnly=false,notice='',catalog=null,lastResult='',activeRequest=null;
+ const publicFeed=()=>window.SV27PublicFixtures;
+ const allDates=()=>!!state.search.trim()&&!rangeOnly;
+ const unique=items=>[...new Set(items.filter(Boolean))].sort((a,b)=>a.localeCompare(b,'pl'));
+ function setOptions(dbData) {
+  const publicCatalog=source==='stored'?[]:(publicFeed()?.catalog || []);
+  const sportRows=publicCatalog.filter(item=>!state.sport||item.sport===state.sport);
+  const countryRows=sportRows.filter(item=>!state.country||item.country===state.country);
+  const leagues=countryRows.filter(item=>!state.tier||String(item.tier)===state.tier);
+  state.sports=unique([...(dbData?.sports||[]),...publicCatalog.map(item=>item.sport),state.sport]);
+  state.countries=unique([...(dbData?.countries||[]),...sportRows.map(item=>item.country),state.country]);
+  state.leagues=unique([...(dbData?.leagues||[]),...leagues.map(item=>item.league),state.league]);
+ }
  const localDay=d=>{const x=new Date(d);return new Date(x.getFullYear(),x.getMonth(),x.getDate())};
  const dateInput=d=>{const x=localDay(d);return `${x.getFullYear()}-${String(x.getMonth()+1).padStart(2,'0')}-${String(x.getDate()).padStart(2,'0')}`};
  const span=()=>{const d=localDay(state.day);let start,end;if(state.mode==='day'){start=d;end=new Date(d.getFullYear(),d.getMonth(),d.getDate()+1)}else if(state.mode==='week'){start=new Date(d.getFullYear(),d.getMonth(),d.getDate()-(d.getDay()+6)%7);end=new Date(start.getFullYear(),start.getMonth(),start.getDate()+7)}else{start=new Date(d.getFullYear(),d.getMonth(),1);end=new Date(d.getFullYear(),d.getMonth()+1,1)}return {start,end}};
  const dateTime=s=>{if(!s)return 'Nie podano';const d=new Date(s);return Number.isFinite(d.valueOf())?d.toLocaleString('pl-PL',{dateStyle:'medium',timeStyle:'short'}):'Nie podano'};
+ function matchTime(match){
+  if(!match.date_only)return dateTime(match.starts_at);
+  const [year,month,day]=match.date_only.split('-').map(Number);
+  return new Date(year,month-1,day).toLocaleDateString('pl-PL')+' (godzina niepodana)';
+ }
  const phase=m=>m.display_status||(m.status==='finished'?'finished':m.status==='cancelled'?'cancelled':m.source_status==='finished'?'finished':m.source_status==='cancelled'?'cancelled':m.source_status==='live'?'live':m.source_status==='postponed'?'postponed':m.sv27_phase==='live'?'live':m.status==='locked'?'locked':new Date(m.starts_at)<=new Date()?'awaiting':'scheduled');
  const statuses={scheduled:'Nadchodzący',live:'Na żywo',finished:'Zakończony',cancelled:'Odwołany',locked:'Typowanie zamknięte',awaiting:'Oczekuje na wynik',postponed:'Przełożony'};
- const leagueTier=m=>{if([1,2,3].includes(Number(m?.tier)))return String(m.tier);const l=String(m?.league||'').toLocaleLowerCase('pl');if(/serie a|premier league|la liga|bundesliga$|ligue 1|ekstraklasa|eredivisie|primeira liga|super lig/.test(l))return '1';if(/serie b|2\. bundesliga|liga 2|ii liga|championship/.test(l))return '2';if(/serie c|3\. liga|iii liga|league one/.test(l))return '3';return ''};
  const el=(tag,text,cls)=>{const n=document.createElement(tag);if(text!==undefined&&text!==null)n.textContent=String(text);if(cls)n.className=cls;return n};
  const button=(label,cb,disabled=false)=>{const b=el('button',label);b.type='button';b.disabled=disabled;b.addEventListener('click',cb);return b};
- function stop(){generation++;clearInterval(timer);clearTimeout(searchTimer);timer=null;searchTimer=null;if(channel&&typeof db!=='undefined'&&db?.removeChannel){try{db.removeChannel(channel)}catch{}}channel=null;currentRoot=null}
+ function stop(){generation++;activeRequest?.abort();pending=false;lastResult='';clearInterval(timer);clearTimeout(searchTimer);timer=null;searchTimer=null;if(channel&&typeof db!=='undefined'&&db?.removeChannel){try{db.removeChannel(channel)}catch{}}channel=null;currentRoot=null}
  function option(value,label){const o=el('option',label);o.value=value;return o}
  function select(label,value,items,all,change){const s=el('select');s.setAttribute('aria-label',label);s.append(option('',all));for(const item of items)if(typeof item==='string'&&item)s.append(option(item,item));s.value=value;s.addEventListener('change',()=>change(s.value));return s}
  function safeLogo(url,alt){if(!url)return null;try{const u=new URL(url);if(u.protocol!=='https:')return null;const img=el('img');img.src=u.href;img.alt=alt;img.loading='lazy';img.referrerPolicy='no-referrer';img.className='sv27-cal-logo';img.addEventListener('error',()=>img.remove());return img}catch{return null}}
@@ -23,38 +40,148 @@
   const date=el('input');date.type='date';date.value=dateInput(state.day);date.setAttribute('aria-label','Wybierz datę');date.addEventListener('change',()=>{if(!date.value)return;const [y,m,d]=date.value.split('-').map(Number);state.day=new Date(y,m-1,d);state.page=0;load()});actions.append(date);
   actions.append(button('→',()=>{const d=localDay(state.day);if(state.mode==='month')d.setMonth(d.getMonth()+1,1);else d.setDate(d.getDate()+(state.mode==='week'?7:1));state.day=d;state.page=0;load()}),button('Dzisiaj',()=>{state.day=new Date();state.page=0;load()}),button('Odśwież',()=>load()));root.append(actions);
   const filters=el('div',null,'sv27-cal-row');
-  const search=el('input');search.id='sv27-cal-search';search.type='search';search.maxLength=100;search.placeholder='Drużyna, zawodnik lub liga';search.value=state.search;search.setAttribute('aria-label','Szukaj drużyny, zawodnika lub ligi');search.addEventListener('input',()=>{state.search=search.value;state.page=0;clearTimeout(searchTimer);searchTimer=setTimeout(()=>load(),350)});filters.append(search);
+  const search=el('input');search.id='sv27-cal-search';search.type='search';search.maxLength=100;search.placeholder='Drużyna, zawodnik lub liga';search.value=state.search;search.setAttribute('aria-label','Szukaj drużyny, zawodnika lub ligi');search.enterKeyHint='search';
+  search.addEventListener('input',()=>{state.search=search.value;state.page=0;clearTimeout(searchTimer);searchTimer=setTimeout(()=>{searchTimer=null;load()},350)});
+  search.addEventListener('keydown',event=>{if(event.key==='Enter'&&!event.isComposing){event.preventDefault();load()}});
+  filters.append(search);
   filters.append(select('Sport',state.sport,state.sports,'Wszystkie sporty',v=>{state.sport=v;state.country='';state.tier='';state.league='';state.page=0;load()}));
   filters.append(select('Kraj',state.country,state.countries,'Wszystkie kraje',v=>{state.country=v;state.tier='';state.league='';state.page=0;load()}));
   const tier=el('select');tier.setAttribute('aria-label','Poziom ligi');tier.append(option('','Wszystkie poziomy'),option('1','Liga 1'),option('2','Liga 2'),option('3','Liga 3'));tier.value=state.tier;tier.addEventListener('change',()=>{state.tier=tier.value;state.league='';state.page=0;load()});filters.append(tier);
-  const visibleLeagues=state.tier?state.leagueCatalog.filter(x=>String(x?.tier)===state.tier).map(x=>x.league):state.leagues;
-  filters.append(select('Liga',state.league,visibleLeagues,'Wszystkie ligi',v=>{state.league=v;state.page=0;load()}));
+  filters.append(select('Liga',state.league,state.leagues,'Wszystkie ligi',v=>{state.league=v;state.page=0;load()}));
   const status=el('select');status.setAttribute('aria-label','Status');status.append(option('all','Wszystkie statusy'));for(const [key,value] of Object.entries(statuses))status.append(option(key,value));status.value=state.status;status.addEventListener('change',()=>{state.status=status.value;state.page=0;load()});filters.append(status);root.append(filters);
-  const info=el('p',state.loading?'Ładowanie meczów…':state.error||`Znaleziono meczów: ${state.total}.`,'muted');info.setAttribute('role','status');root.append(info);
-  if(!state.loading&&!state.error&&state.mode!=='day')drawGrid(root);const container=el('div',null,'sv27-cal-list');root.append(container);drawList(container);
+  const sourceSelect=el('select');sourceSelect.setAttribute('aria-label','Źródło meczów');
+  for(const [key,label] of [['auto','Automatyczny wybór źródła'],['stored','Mecze SPORTIVRA'],['public','Publiczny terminarz']])sourceSelect.append(option(key,label));
+  sourceSelect.value=source;sourceSelect.onchange=()=>{source=sourceSelect.value;state.page=0;load()};filters.append(sourceSelect);
+  if(state.sport||state.country||state.tier||state.league||state.search||state.status!=='all'||source!=='auto'||rangeOnly){
+   filters.append(button('Wyczyść filtry',()=>{
+    Object.assign(state,{sport:'',country:'',tier:'',league:'',search:'',status:'all',page:0});
+    rangeOnly=false;source='auto';load();
+   }));
+  }
+  const rangeLabel=el('label',null,'sv27-range');const range=el('input');range.type='checkbox';range.checked=rangeOnly;
+  range.onchange=()=>{rangeOnly=range.checked;state.page=0;load()};rangeLabel.append(range,' Szukaj tylko w wybranych datach');root.append(rangeLabel);
+  root.append(el('div',null,'sv27-results'));displayResults();
   if(hadSearch){search.focus();if(caret!=null)search.setSelectionRange(caret,caret)}
  }
- function drawList(container){if(state.error||state.loading)return;if(!state.rows.length){container.append(el('p','Brak meczów dla wybranych filtrów i dat. Dostępność zależy od danych dostawcy.'));return}
-  for(const m of state.rows){const detail=el('details',null,'sv27-match'),sum=el('summary');const homeLogo=safeLogo(m.home_logo_url,'');if(homeLogo)sum.append(homeLogo);sum.append(el('strong',`${m.home} — ${m.away}`));const awayLogo=safeLogo(m.away_logo_url,'');if(awayLogo)sum.append(awayLogo);const sourceOnly=(m.source_status&&['live','finished','cancelled','postponed'].includes(m.source_status)&&!['finished','cancelled'].includes(m.status));sum.append(document.createTextNode(' • '+dateTime(m.starts_at)+' • '+(statuses[phase(m)]||'Status nieznany')+(sourceOnly?' (dane dostawcy)':'')));detail.append(sum);
+ function displayResults(){
+  const host=currentRoot?.querySelector('.sv27-results');if(!host)return;
+  const opened=new Set([...host.querySelectorAll('details[open]')].map(item=>item.dataset.key));
+  host.replaceChildren();
+  const info=el('p',state.loading?'Ładowanie meczów…':state.error||`Znaleziono meczów: ${state.total}.`,'muted');
+  info.setAttribute('role','status');host.append(info);
+  if(notice)host.append(el('p',notice,'muted'));
+  if(!state.loading&&!state.error&&state.mode!=='day'&&!allDates())drawGrid(host);
+  const list=el('div',null,'sv27-cal-list');host.append(list);drawList(list);
+  for(const detail of list.querySelectorAll('details'))detail.open=opened.has(detail.dataset.key);
+ }
+ function drawList(container){if(state.error||state.loading)return;if(!state.rows.length){container.append(el('p',allDates()?'Nie znaleziono meczów. Spróbuj wpisać fragment nazwy drużyny lub wyczyścić filtry.':'Brak meczów dla wybranych filtrów i dat. Zmień zakres dat lub wpisz nazwę drużyny.'));return}
+  for(const m of state.rows){const detail=el('details',null,'sv27-match'),sum=el('summary');detail.dataset.key=String(m.id);const homeLogo=safeLogo(m.home_logo_url,'');if(homeLogo)sum.append(homeLogo);sum.append(el('strong',`${m.home} — ${m.away}`));const awayLogo=safeLogo(m.away_logo_url,'');if(awayLogo)sum.append(awayLogo);const sourceOnly=(m.source_status&&['live','finished','cancelled','postponed'].includes(m.source_status)&&!['finished','cancelled'].includes(m.status));sum.append(document.createTextNode(' • '+matchTime(m)+' • '+(statuses[phase(m)]||'Status nieznany')+(sourceOnly?' (dane dostawcy)':'')));detail.append(sum);
    const league=el('p');const leagueLogo=safeLogo(m.league_logo_url,'');if(leagueLogo)league.append(leagueLogo);league.append(document.createTextNode(`Liga: ${m.league||'Nie podano'} • Sport: ${m.sport||'Nie podano'}${m.country?' • Kraj: '+m.country:''}`));detail.append(league);
-   detail.append(el('p',`Rozpoczęcie: ${dateTime(m.starts_at)} • Zakończenie: ${dateTime(m.ends_at)}`));
+   detail.append(el('p',`Rozpoczęcie: ${matchTime(m)} • Zakończenie: ${dateTime(m.ends_at)}`));
    if(m.source_needs_review)detail.append(el('p','Dane dostawcy różnią się od danych meczu i oczekują na weryfikację.'));
    if(m.source_starts_at&&Date.parse(m.source_starts_at)!==Date.parse(m.starts_at))detail.append(el('p',`Inny termin według dostawcy: ${dateTime(m.source_starts_at)}. Rozliczenie wymaga weryfikacji.`));
    if(m.source_score_home!=null&&m.source_score_away!=null)detail.append(el('p',`Wynik dostawcy: ${m.source_score_home} : ${m.source_score_away}${m.status!=='finished'?' (niepotwierdzony do rozliczenia)':''}`));
-   if(m.score_home!=null&&m.score_away!=null)detail.append(el('p',`Wynik zatwierdzony: ${m.score_home} : ${m.score_away}`));else if(m.result)detail.append(el('p',`Rozstrzygnięcie: ${m.result}`));
+   if(m.score_home!=null&&m.score_away!=null)detail.append(el('p',`${m.source_provider==='openfootball'?'Wynik':'Wynik zatwierdzony'}: ${m.score_home} : ${m.score_away}`));else if(m.result)detail.append(el('p',`Rozstrzygnięcie: ${m.result}`));
    if(m.participants_search)detail.append(el('p',`Zawodnicy: ${m.participants_search}`));container.append(detail)}
   const controls=el('div',null,'sv27-cal-row');controls.append(button('← Poprzednia',()=>{state.page--;load()},state.page<=0));controls.append(el('span',`Strona ${state.page+1} z ${Math.max(1,Math.ceil(state.total/50))}`));controls.append(button('Następna →',()=>{state.page++;load()},(state.page+1)*50>=state.total));container.append(controls)
  }
  function drawGrid(root){const {start,end}=span(),grid=el('div',null,'sv27-cal-grid');let d=localDay(start);if(state.mode==='month')d.setDate(d.getDate()-(d.getDay()+6)%7);const n=state.mode==='week'?7:42;for(let i=0;i<n;i++){const day=new Date(d.getFullYear(),d.getMonth(),d.getDate()+i),key=dateInput(day),count=state.days[key]||0;const b=button(day.toLocaleDateString('pl-PL',{weekday:'short',day:'numeric',month:'short'})+(count?` · ${count}`:''),()=>{state.day=day;state.mode='day';state.page=0;load()});if(day<start||day>=end)b.classList.add('sv27-cal-outside');grid.append(b)}root.append(grid)}
- async function load(){if(!currentRoot)return;const token=++generation;state.loading=true;state.error='';display();if(typeof db==='undefined'||!db||typeof user==='undefined'||!user){state.loading=false;state.rows=[];state.total=0;state.error='Zaloguj się, aby zobaczyć terminarz.';display();return}
-  try{const {start,end}=span();const args={p_start:start.toISOString(),p_end:end.toISOString(),p_sport:state.sport||null,p_country:state.country||null,p_league:state.league||null,p_search:state.search.trim()||null,p_status:state.status,p_page:state.page,p_tz:Intl.DateTimeFormat().resolvedOptions().timeZone||'UTC'};
-   if(typeof db.rpc!=='function')throw Error('Terminarz wymaga aktualnej migracji bazy (30_CALENDAR_SEARCH.sql).');
-   const {data,error}=await db.rpc('sv27_calendar_search',args);if(error)throw error;if(token!==generation)return;
-   if(!data||!Array.isArray(data.rows))throw Error('Serwer zwrócił nieprawidłowe dane.');state.rows=state.tier?data.rows.filter(match=>leagueTier(match)===state.tier):data.rows;state.total=state.tier?state.rows.length:(Number(data.total)||0);state.sports=Array.isArray(data.sports)?data.sports:[];state.countries=Array.isArray(data.countries)?data.countries:[];state.leagues=Array.isArray(data.leagues)?data.leagues:[];state.leagueCatalog=Array.isArray(data.league_catalog)?data.league_catalog:[];state.days=data.days&&typeof data.days==='object'?data.days:{};state.error='';
-  }catch(e){if(token!==generation)return;state.rows=[];state.total=0;state.error='Nie udało się pobrać terminarza: '+(e?.message||String(e))+'. Dotychczasowy terminarz jest dostępny poniżej.'}state.loading=false;display()
+ function updateOptionsInPlace(){
+  for(const [label,values] of [['Sport',state.sports],['Kraj',state.countries],['Liga',state.leagues]]){
+   const menu=currentRoot.querySelector('select[aria-label="'+label+'"]');
+   if(!menu)continue;
+   const existing=[...menu.options].slice(1).map(item=>item.value);
+   if(JSON.stringify(existing)===JSON.stringify(values))continue;
+   const value=menu.value;
+   menu.replaceChildren(menu.options[0],...values.map(item=>option(item,item)));
+   menu.value=value;
+  }
  }
- const css=document.createElement('style');css.textContent='.sv27-cal-row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:10px 0}.sv27-cal-row input,.sv27-cal-row select{width:auto;min-width:160px;max-width:100%;margin:0}.sv27-cal-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:5px;overflow-x:auto}.sv27-cal-grid button{min-width:0;overflow-wrap:anywhere;font-size:12px;padding:8px 2px}.sv27-cal-outside{opacity:.55}.sv27-match{border:1px solid var(--border);border-radius:10px;margin:8px 0;padding:12px;overflow-wrap:anywhere}.sv27-match summary{cursor:pointer}.sv27-cal-logo{width:22px;height:22px;object-fit:contain;vertical-align:middle;margin:0 5px}@media(max-width:550px){.sv27-cal-grid button{font-size:10px;padding:6px 1px}.sv27-cal-row input,.sv27-cal-row select{flex:1;min-width:130px}}';document.head.append(css);
+ function describe(error){return error?.message||String(error)}
+ async function load(quiet=false){
+  if(!currentRoot)return;
+  clearTimeout(searchTimer);searchTimer=null;
+  const token=++generation;
+  activeRequest?.abort();
+  pending=true;
+  if(!quiet){
+   state.loading=true;state.error='';notice='';
+   setOptions(source==='public'?null:catalog);display();
+  }
+  const {start,end}=span();
+  const query={start:start.toISOString(),end:end.toISOString(),sport:state.sport,country:state.country,
+   tier:state.tier,league:state.league,search:state.search.trim(),status:state.status,
+   anyDate:allDates(),tz:Intl.DateTimeFormat().resolvedOptions().timeZone||'UTC',page:state.page};
+  let problem='',result=null,info='';
+  try{
+   if(typeof user==='undefined'||!user)throw Error('Zaloguj się, aby zobaczyć terminarz.');
+   if(source!=='public'){
+    try{
+     const request=db.rpc('sv27_calendar_find',{
+      p_start:query.start,p_end:query.end,p_sport:query.sport||null,p_country:query.country||null,
+      p_tier:query.tier?Number(query.tier):null,p_league:query.league||null,p_search:query.search||null,
+      p_status:query.status,p_page:query.page,p_tz:query.tz,p_any_date:query.anyDate});
+     const controller=new AbortController();
+     activeRequest=controller;
+     let timeout;
+     let response;
+     try{
+      response=await Promise.race([
+       request.abortSignal ? request.abortSignal(controller.signal) : request,
+       new Promise((_,reject)=>{timeout=setTimeout(()=>{controller.abort();reject(Error('Upłynął czas odpowiedzi Supabase.'));},6000)})
+      ]);
+     }finally{
+      clearTimeout(timeout);
+      if(activeRequest===controller)activeRequest=null;
+     }
+     const {data,error}=response;
+     if(error)throw error;
+     if(!Array.isArray(data?.rows))throw Error('Niepoprawna odpowiedź terminarza.');
+     if(token!==generation)return;
+     result=data;catalog=data;info='Mecze SPORTIVRA'+(query.anyDate?' · wyszukiwanie we wszystkich datach.':'.');
+    }catch(error){
+     problem=error?.code==='PGRST202'?'Zainstaluj SQL 41 dla terminarza w Supabase.':describe(error);
+     if(source==='stored')throw Error(problem);
+    }
+   }
+   if(token!==generation)return;
+   if(source==='public'||(source==='auto'&&!result?.total)){
+    if(!publicFeed()){
+     if(!result)throw Error(problem||'Brakuje pliku sv27-public-fixtures.js na stronie.');
+     info+=' Publiczny terminarz jest niedostępny.';
+    }else{
+     const publicResult=await publicFeed().search(query);
+     if(!Array.isArray(publicResult?.rows))throw Error('Niepoprawna odpowiedź publicznego terminarza.');
+     info=[publicResult.notice||'Publiczny terminarz.',problem&&('Wyszukiwanie w SPORTIVRA niedostępne. '+problem)].filter(Boolean).join(' ');
+     if(publicResult.unavailable && !publicResult.total)throw Error(info);
+     result=publicResult;
+    }
+   }
+   if(token!==generation)return;
+   setOptions(source==='public'?null:catalog);
+   state.rows=result.rows;state.total=Number(result.total)||0;state.days=result.days||{};state.error='';
+   notice=info;
+   const lastPage=Math.max(0,Math.ceil(state.total/50)-1);
+   if(state.page>lastPage){state.page=lastPage;return load()}
+  }catch(error){
+   if(token!==generation)return;
+   state.rows=[];state.total=0;state.days={};state.error='Nie udało się pobrać terminarza: '+describe(error);notice='';
+  }finally{
+   if(token===generation){
+    pending=false;state.loading=false;
+    const snapshot=JSON.stringify([state.rows,state.total,state.days,state.error,notice]);
+    updateOptionsInPlace();
+    if(!quiet||lastResult!==snapshot)displayResults();
+    lastResult=snapshot;
+   }
+  }
+ }
+ function refreshVisible(){
+  if(!currentRoot?.isConnected||active!=='📅 Terminarz'){stop();return}
+  if(!document.hidden&&!pending&&!searchTimer)load(true);
+ }
+ const css=document.createElement('style');css.textContent='.sv27-cal-row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:10px 0}.sv27-cal-row input,.sv27-cal-row select{width:auto;min-width:160px;max-width:100%;margin:0}.sv27-range{display:inline-flex;align-items:center;gap:8px;cursor:pointer}.sv27-range input[type=checkbox]{width:auto;margin:0}.sv27-cal-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:5px;overflow-x:auto}.sv27-cal-grid button{min-width:0;overflow-wrap:anywhere;font-size:12px;padding:8px 2px}.sv27-cal-outside{opacity:.55}.sv27-match{border:1px solid var(--border);border-radius:10px;margin:8px 0;padding:12px;overflow-wrap:anywhere}.sv27-match summary{cursor:pointer}.sv27-cal-logo{width:22px;height:22px;object-fit:contain;vertical-align:middle;margin:0 5px}@media(max-width:550px){.sv27-cal-grid button{font-size:10px;padding:6px 1px}.sv27-cal-row input,.sv27-cal-row select{flex:1;min-width:130px}}';document.head.append(css);
  const previous=renderPlayer;
- renderPlayer=function(...args){stop();previous(...args);if(active!=='📅 Terminarz')return;const view=document.getElementById('view');if(!view)return;const legacy=el('details',null,'card');legacy.append(el('summary','Starszy terminarz i typy — osobne dane'));legacy.append(el('p','Ta starsza część korzysta z innego źródła meczów i osobnej historii typów. Nowy terminarz i nowe kupony korzystają ze wspólną listę meczów powyżej.','muted'));while(view.firstChild)legacy.append(view.firstChild);const root=el('section',null,'card');root.id='sv27-calendar';view.append(root,legacy);currentRoot=root;state.page=0;load();timer=setInterval(()=>{if(!document.hidden&&currentRoot&&!currentRoot.contains(document.activeElement))load()},10000);if(typeof db!=='undefined'&&db&&typeof db.channel==='function'){try{channel=db.channel('sv27-calendar-changes').on('postgres_changes',{event:'*',schema:'public',table:'fz26_fixtures'},()=>load()).subscribe()}catch{channel=null}}};
+ renderPlayer=function(...args){stop();previous(...args);if(active!=='📅 Terminarz')return;const view=document.getElementById('view');if(!view)return;const legacy=el('details',null,'card');legacy.append(el('summary','Starszy terminarz i typy — osobne dane'));legacy.append(el('p','Tutaj znajdziesz wcześniejsze mecze i historię typów. Publiczny terminarz powyżej służy do sprawdzania spotkań i wyników.','muted'));while(view.firstChild)legacy.append(view.firstChild);const root=el('section',null,'card');root.id='sv27-calendar';view.append(root,legacy);currentRoot=root;state.page=0;load();timer=setInterval(refreshVisible,10000);if(typeof db!=='undefined'&&db&&typeof db.channel==='function'){try{channel=db.channel('sv27-calendar-changes').on('postgres_changes',{event:'*',schema:'public',table:'fz26_fixtures'},refreshVisible).subscribe()}catch{channel=null}}};
  window.addEventListener('beforeunload',stop);
 })();

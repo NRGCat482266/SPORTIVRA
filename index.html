@@ -540,7 +540,8 @@ let rows=[];try{const response=await fetch(window.SPORTIVRA_CONFIG?.supabaseUrl 
 const running=rows.filter(active);o.querySelector('#fz25event-list').innerHTML='<h2>🟢 Aktywne wydarzenia ('+running.length+')</h2><div class="fz25event-grid">'+(running.map(e=>'<article class="fz25event-card"><h3>'+safe(e.title)+'</h3><p>🐾 10 petów · 🥚 3 jajka · 🎁 sklep eventowy (w przygotowaniu)</p><p>Koniec: '+safe(e.ends_at?new Date(e.ends_at).toLocaleString('pl-PL'):'ręcznie')+'</p></article>').join('')||'<p>Brak aktywnych eventów.</p>')+'</div><h2>📅 Zaplanowane</h2><div class="fz25event-grid">'+(rows.filter(e=>e.enabled&&!active(e)&&e.starts_at&&Date.parse(e.starts_at)>Date.now()).map(e=>'<article class="fz25event-card"><h3>'+safe(e.title)+'</h3><p>Start: '+safe(new Date(e.starts_at).toLocaleString('pl-PL'))+'</p></article>').join('')||'<p>Brak zaplanowanych eventów.</p>')+'</div><p>Plan: '+CATALOG.length+' rodzajów wydarzeń. Sklep i pety eventowe wymagają osobnego serwerowego systemu nagród.</p>';
 }b.onclick=open;
 })();</script><script src="assets/event-content26.js?v=2608" defer></script><script src="assets/arcade-weekly26.js?v=2617" defer></script><script src="assets/sportivra-arcade-games.js?v=2618" defer></script><script src="assets/fantasy26-social.js?v=2610" defer></script><script src="assets/fantasy26-scoring.js?v=2611" defer></script><script src="assets/sportivra-roster.js" defer></script>
-<script src="assets/sv27-calendar.js" defer></script>
+<script src="assets/sv27-public-fixtures.js?v=41" defer></script>
+<script src="assets/sv27-calendar.js?v=41" defer></script>
 <script src="assets/events27.js?v=2702" defer></script>
 <script src="assets/sv27-bets.js" defer></script>
 <script src="assets/sv27-navigation.js?v=2702" defer></script>
