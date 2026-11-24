@@ -9,13 +9,15 @@
  function setOptions(dbData) {
   const publicCatalog=source==='stored'?[]:(publicFeed()?.catalog || []);
   const publicSports=source==='stored'?[]:(publicFeed()?.sports || []);
-  const allCatalog=[...publicCatalog,...(dbData?.league_catalog||[])];
-  const sportRows=allCatalog.filter(item=>!state.sport||item.sport===state.sport);
+  const canonicalSport=value=>{const key=fixtureKey(value);const map={soccer:'Piłka nożna',football:'Piłka nożna','pilka nozna':'Piłka nożna',basketball:'Koszykówka','koszykowka':'Koszykówka',volleyball:'Siatkówka','siatkowka':'Siatkówka',handball:'Piłka ręczna','pilka reczna':'Piłka ręczna',esports:'Esport',esport:'Esport','formula 1':'Formuła 1',f1:'Formuła 1',tennis:'Tenis',tenis:'Tenis',skiing:'Narty',narty:'Narty'};return map[key]||null};
+  const normalizeCatalog=rows=>(rows||[]).map(item=>({...item,sport:canonicalSport(item.sport)})).filter(item=>item.sport);
+  const allCatalog=[...normalizeCatalog(publicCatalog),...normalizeCatalog(dbData?.league_catalog)];
+  const sportRows=allCatalog.filter(item=>!state.sport||item.sport===canonicalSport(state.sport));
   const tierRows=sportRows.filter(item=>!state.tier||String(item.tier)===state.tier);
   const countryRows=tierRows.filter(item=>!state.country||item.country===state.country);
-  state.sports=unique([...(dbData?.sports||[]),...publicSports,...allCatalog.map(item=>item.sport),state.sport]);
-  state.countries=unique([...tierRows.map(item=>item.country),state.country]);
-  state.leagues=unique([...countryRows.map(item=>item.league),state.league]);
+  state.sports=unique([...(dbData?.sports||[]).map(canonicalSport),...publicSports.map(canonicalSport),...allCatalog.map(item=>item.sport)].filter(Boolean));
+  state.countries=unique(tierRows.map(item=>item.country));
+  state.leagues=unique(countryRows.map(item=>item.league));
  }
  const localDay=d=>{const x=new Date(d);return new Date(x.getFullYear(),x.getMonth(),x.getDate())};
  const dateInput=d=>{const x=localDay(d);return `${x.getFullYear()}-${String(x.getMonth()+1).padStart(2,'0')}-${String(x.getDate()).padStart(2,'0')}`};
@@ -203,11 +205,14 @@
      }else{
       const stored=result||{rows:[],total:0,days:{},sports:[],countries:[],leagues:[],league_catalog:[]};
       if(publicResult.unavailable&&!publicResult.total&&!stored.total)throw Error(info);
-      const combined=mergeFixtureRows(stored.rows,publicResult.rows);
-      const combineCatalog=(a,b)=>[...new Map([...(a||[]),...(b||[])].map(x=>[[x.sport,x.country,x.league].join('|'),x])).values()];
-      catalog={...stored,sports:unique([...(stored.sports||[]),...(publicResult.sports||[])]),countries:unique([...(stored.countries||[]),...(publicResult.countries||[])]),leagues:unique([...(stored.leagues||[]),...(publicResult.leagues||[])]),league_catalog:combineCatalog(stored.league_catalog,publicResult.league_catalog)};
+      const canonical=s=>{const k=fixtureKey(s);const aliases={soccer:'Piłka nożna',football:'Piłka nożna','pilka nozna':'Piłka nożna',basketball:'Koszykówka','koszykowka':'Koszykówka',volleyball:'Siatkówka','siatkowka':'Siatkówka',handball:'Piłka ręczna','pilka reczna':'Piłka ręczna',esports:'Esport',esport:'Esport','formula 1':'Formuła 1',f1:'Formuła 1',tennis:'Tenis',skiing:'Narty',narty:'Narty'};return aliases[k]||null};
+      const cleanRows=rows=>(rows||[]).map(row=>({...row,sport:canonical(row.sport)})).filter(row=>row.sport);
+      const cleanCatalog=rows=>(rows||[]).map(row=>({...row,sport:canonical(row.sport)})).filter(row=>row.sport);
+      const combined=mergeFixtureRows(cleanRows(stored.rows),cleanRows(publicResult.rows));
+      const combineCatalog=(a,b)=>[...new Map([...cleanCatalog(a),...cleanCatalog(b)].map(x=>[[x.sport,x.country,x.league].join('|'),x])).values()];
+      catalog={...stored,sports:unique([...(stored.sports||[]).map(canonical),...(publicResult.sports||[]).map(canonical)].filter(Boolean)),countries:unique([...(stored.countries||[]),...(publicResult.countries||[])]),leagues:unique([...(stored.leagues||[]),...(publicResult.leagues||[])]),league_catalog:combineCatalog(stored.league_catalog,publicResult.league_catalog)};
       const days={...publicResult.days};for(const [day,count] of Object.entries(stored.days||{}))days[day]=Math.max(Number(days[day]||0),Number(count||0));
-      result={...publicResult,rows:combined.rows,total:Math.max(0,Number(stored.total||0)+Number(publicResult.total||0)-combined.duplicates),days};
+      result={...publicResult,rows:combined.rows,total:combined.rows.length,days};
       info=stored.total?'Połączono mecze zapisane w SPORTIVRA z publicznymi terminarzami. '+info:info;
      }
     }

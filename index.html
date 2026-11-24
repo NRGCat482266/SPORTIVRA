@@ -244,7 +244,7 @@ async function fzLoadF1(){
 }
 // Kalendarz dla każdej dyscypliny: publiczne wydarzenia (gdy API je udostępnia)
 // oraz wydarzenia administratora z bazy SPORTIVRA.
-const FZ_DB_SPORT={'Siatkówka':'Volleyball','Piłka ręczna':'Handball','Esport':'Esports'};
+const FZ_DB_SPORT={'Siatkówka':'Volleyball','Piłka ręczna':'Handball','Esport':'Esports','Tenis':'Tennis','Narty':'Skiing'};
 async function fzLoadOtherSports(){
  fzLiveFixtures=[];
  fzScheduleInfo='Pobieranie terminarza '+fzSport+'…';renderPlayer();
@@ -256,7 +256,7 @@ async function fzLoadOtherSports(){
   const norm=x=>String(x||'').toLocaleLowerCase('pl-PL').normalize('NFD').replace(/[\u0300-\u036f]/g,'');
   const leagues=(json.leagues||[]).filter(x=>norm(x.strSport)===norm(type));
   const term=fzLeague==='Wszystkie'?'':norm(fzLeague).replace(/\s*\([^)]*\)/g,'');
-  const matches=leagues.filter(x=>!term||norm(x.strLeague).includes(term)||term.includes(norm(x.strLeague))).slice(0,4);
+  const matches=leagues.filter(x=>!term||norm(x.strLeague).includes(term)||term.includes(norm(x.strLeague))).slice(0,30);
   if(!matches.length){fzScheduleInfo='Nie znaleziono publicznego terminarza tej ligi. Poniżej widoczne są wydarzenia dodane przez ADMINA.';renderPlayer();return;}
   const results=await Promise.allSettled(matches.map(async l=>{
    const r=await fetch('https://www.thesportsdb.com/api/v1/json/123/eventsnextleague.php?id='+encodeURIComponent(l.idLeague));
@@ -268,7 +268,7 @@ async function fzLoadOtherSports(){
  }catch(e){fzScheduleInfo='Nie udało się pobrać publicznego terminarza ('+e.message+'). Wyświetlamy wydarzenia z bazy SPORTIVRA.'}
  renderPlayer();
 }
-async function fzLoadFixtures(){if(fzSport==='Formuła 1')return fzLoadF1();if(FZ_DB_SPORT[fzSport])return fzLoadOtherSports();fzLiveFixtures=[];const code=FZ_SPORTS[fzSport][fzLeague]||Object.values(FZ_SPORTS[fzSport]).find(Boolean);if(!code){fzScheduleInfo='Dla tej dyscypliny nie mamy jeszcze podłączonego darmowego źródła na żywo. Poniżej wyświetlamy wydarzenia z bazy SPORTIVRA dodane przez ADMINA.';renderPlayer();return}fzScheduleInfo='Pobieranie publicznego terminarza…';renderPlayer();try{const response=await fetch('https://site.api.espn.com/apis/site/v2/sports/'+code+'/scoreboard');if(!response.ok)throw Error('HTTP '+response.status);const data=await response.json();fzLiveFixtures=(data.events||[]).slice(0,25).map(e=>({id:'espn:'+code+':'+e.id,name:e.name||e.shortName||'Wydarzenie',date:e.date,league:fzLeague,completed:e.status?.type?.completed===true,homeScore:e.competitions?.[0]?.competitors?.find(c=>c.homeAway==='home')?.score,awayScore:e.competitions?.[0]?.competitors?.find(c=>c.homeAway==='away')?.score,home:e.competitions?.[0]?.competitors?.find(c=>c.homeAway==='home')?.team?.displayName,away:e.competitions?.[0]?.competitors?.find(c=>c.homeAway==='away')?.team?.displayName}));fzScheduleInfo=fzLiveFixtures.length?'Publiczny terminarz informacyjny — nie są to automatycznie mecze do obstawiania.':'Brak wydarzeń w aktualnym oknie publicznego terminarza.'}catch(e){fzScheduleInfo='Publiczny terminarz jest chwilowo niedostępny ('+e.message+'). Wydarzenia z SPORTIVRA nadal są widoczne.'}renderPlayer()}
+async function fzLoadFixtures(){if(fzSport==='Formuła 1')return fzLoadF1();if(FZ_DB_SPORT[fzSport])return fzLoadOtherSports();fzLiveFixtures=[];const code=FZ_SPORTS[fzSport][fzLeague]||Object.values(FZ_SPORTS[fzSport]).find(Boolean);if(!code){fzScheduleInfo='Dla tej dyscypliny nie mamy jeszcze podłączonego darmowego źródła na żywo. Poniżej wyświetlamy wydarzenia z bazy SPORTIVRA dodane przez ADMINA.';renderPlayer();return}fzScheduleInfo='Pobieranie terminarza '+fzSport+'…';renderPlayer();try{const today=new Date(),end=new Date(today);end.setDate(end.getDate()+90);const fmt=d=>d.toISOString().slice(0,10).replaceAll('-','');const response=await fetch('https://site.api.espn.com/apis/site/v2/sports/'+code+'/scoreboard?dates='+fmt(today)+'-'+fmt(end)+'&limit=500');if(!response.ok)throw Error('HTTP '+response.status);const data=await response.json();fzLiveFixtures=(data.events||[]).map(e=>({id:'espn:'+code+':'+e.id,name:e.name||e.shortName||'Wydarzenie',date:e.date,league:fzLeague,completed:e.status?.type?.completed===true,homeScore:e.competitions?.[0]?.competitors?.find(c=>c.homeAway==='home')?.score,awayScore:e.competitions?.[0]?.competitors?.find(c=>c.homeAway==='away')?.score,home:e.competitions?.[0]?.competitors?.find(c=>c.homeAway==='home')?.team?.displayName,away:e.competitions?.[0]?.competitors?.find(c=>c.homeAway==='away')?.team?.displayName}));fzScheduleInfo=fzLiveFixtures.length?'Publiczny terminarz informacyjny ESPN — najbliższe 90 dni.':'ESPN nie zwrócił meczów dla tej ligi w najbliższych 90 dniach.'}catch(e){fzScheduleInfo='Publiczny terminarz jest chwilowo niedostępny ('+e.message+'). Wydarzenia z SPORTIVRA nadal są widoczne.'}renderPlayer()}
 const FZ_F1_DRIVERS=['Max Verstappen','Lando Norris','Oscar Piastri','Charles Leclerc','Lewis Hamilton','George Russell','Kimi Antonelli','Carlos Sainz','Alex Albon','Fernando Alonso','Lance Stroll','Pierre Gasly','Esteban Ocon','Oliver Bearman','Nico Hülkenberg','Gabriel Bortoleto','Yuki Tsunoda','Liam Lawson'];
 function fzF1Predictor(){const races=fzLiveFixtures.filter(x=>x.kind==='Wyścig'&&new Date(x.date)>new Date());const next=races[0];return `<div class="card"><h2>🏎️ Kto wygra Grand Prix?</h2><p>${next?esc(next.name)+' · '+new Date(next.date).toLocaleString('pl-PL'):'Pobierz kalendarz F1, aby wybrać nadchodzący wyścig.'}</p><label>Wybierz kierowcę<select id="fzDriverPick"><option value="">Wybierz kierowcę</option>${FZ_F1_DRIVERS.map(n=>`<option>${esc(n)}</option>`).join('')}</select></label><button class="primary" id="fzSaveF1Pick" ${next?'':'disabled'}>🏁 Zapisz typ kierowcy</button><p class="muted">To typowanie treningowe zapisywane na tym urządzeniu, BEZ stawki i wypłaty. Zakład za wirtualne pieniądze na kierowcę wymaga nowego typu zakładu i bezpiecznego rozliczania w bazie Supabase.</p><div id="fzF1PickStatus"></div></div>`}
 function fzWire(){document.querySelectorAll('[data-fzsport]').forEach(b=>b.onclick=()=>{fzSport=b.dataset.fzsport;fzLeague='Wszystkie';fzLiveFixtures=[];fzScheduleInfo='';renderPlayer();fzLoadFixtures()});const sel=document.getElementById('fzLeague');if(sel)sel.onchange=()=>{fzLeague=sel.value;fzLiveFixtures=[];fzScheduleInfo='';renderPlayer();fzLoadFixtures()};const load=document.getElementById('fzGetFixtures');if(load)load.onclick=fzLoadFixtures;
@@ -289,14 +289,7 @@ function fzWireInlineBets(){
  document.querySelectorAll('[data-inline-bet]').forEach(b=>b.onclick=()=>action(b,async()=>{const id=b.dataset.inlineBet,amount=Number(document.getElementById('fz-stake-'+id).value);if(!Number.isInteger(amount)||amount<1||amount>100000)throw Error('Stawka musi być liczbą całkowitą od 1 do 100000');if(!chosen[id])throw Error('Najpierw wybierz typ');await rpc('fz24_bet',{mid:Number(id),selection:chosen[id],amount});await refresh();note('Zakład przyjęty!')}));
  const r=document.getElementById('fz-inline-refresh');if(r)r.onclick=e=>action(e.currentTarget,async()=>{await fz24Fetch();renderPlayer();note('Zakłady odświeżone.')});
 }
-renderPlayer=function(){
- if(active==='📅 Terminarz'){
-  tabs(PAGES,renderPlayer);
-  const v=$('view');v.innerHTML=`${fzSportControls()}<div class="card"><h2>📅 Terminarz — ${FZ_EMOJI[fzSport]} ${esc(fzSport)}</h2><p class="muted">${esc(fzScheduleInfo||'Wybierz sport i ligę. Publiczne terminarze aktualizują się po wybraniu filtra.')}</p>${fzLiveFixtures.map(x=>`<div class="fz-fixture"><b>${esc(x.name)}</b><div class="muted">${esc(x.league||fzLeague)} · ${new Date(x.date).toLocaleString('pl-PL')}</div><small>Wydarzenie informacyjne. Można typować tylko mecze udostępnione osobno w bazie SPORTIVRA.</small></div>`).join('')}${fzMatchCards()||(!fzLiveFixtures.length?'<p>Brak wydarzeń dla wybranego filtra.</p>':'')}</div>${fzInlineBets()}${fzSport==='Formuła 1'?fzF1Predictor():''}<div class="card"><h2>⏳ Wielkie turnieje</h2><div class="fz-sport-grid">${fzCountdown()}</div></div>`;
-  fzWire();fzWireInlineBets();return;
- }
- fz24SportRender();
-};
+renderPlayer=function(){fz24SportRender()};
 
 // SPORTIVRA 2.5: lokalne typowanie terminarza bez zmian SQL.
 // Symulowane kursy, zapis w localStorage; wynik nie jest zgadywany.
@@ -543,8 +536,8 @@ let rows=[];try{const response=await fetch(window.SPORTIVRA_CONFIG?.supabaseUrl 
 const running=rows.filter(active);o.querySelector('#fz25event-list').innerHTML='<h2>🟢 Aktywne wydarzenia ('+running.length+')</h2><div class="fz25event-grid">'+(running.map(e=>'<article class="fz25event-card"><h3>'+safe(e.title)+'</h3><p>🐾 10 petów · 🥚 3 jajka · 🎁 sklep eventowy (w przygotowaniu)</p><p>Koniec: '+safe(e.ends_at?new Date(e.ends_at).toLocaleString('pl-PL'):'ręcznie')+'</p></article>').join('')||'<p>Brak aktywnych eventów.</p>')+'</div><h2>📅 Zaplanowane</h2><div class="fz25event-grid">'+(rows.filter(e=>e.enabled&&!active(e)&&e.starts_at&&Date.parse(e.starts_at)>Date.now()).map(e=>'<article class="fz25event-card"><h3>'+safe(e.title)+'</h3><p>Start: '+safe(new Date(e.starts_at).toLocaleString('pl-PL'))+'</p></article>').join('')||'<p>Brak zaplanowanych eventów.</p>')+'</div><p>Plan: '+CATALOG.length+' rodzajów wydarzeń. Sklep i pety eventowe wymagają osobnego serwerowego systemu nagród.</p>';
 }b.onclick=open;
 })();</script><script src="assets/event-content26.js?v=2608" defer></script><script src="assets/arcade-weekly26.js?v=2617" defer></script><script src="assets/sportivra-arcade-games.js?v=2618" defer></script><script src="assets/fantasy26-social.js?v=2610" defer></script><script src="assets/fantasy26-scoring.js?v=2611" defer></script><script src="assets/sportivra-roster.js" defer></script>
-<script src="assets/sv27-public-fixtures.js?v=47" defer></script>
-<script src="assets/sv27-calendar.js?v=47" defer></script>
+<script src="assets/sv27-public-fixtures.js?v=48" defer></script>
+<script src="assets/sv27-calendar.js?v=48" defer></script>
 <script src="assets/events27.js?v=2702" defer></script>
 <script src="assets/sv27-bets.js" defer></script>
 <script src="assets/sv27-navigation.js?v=2702" defer></script>
