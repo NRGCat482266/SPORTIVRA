@@ -23,6 +23,28 @@
   ];
   const catalog = groups.flatMap(([country, zone, code, leagues]) => leagues.map((league, index) =>
     ({sport, country, tier: index + 1, league, zone, code: code + '.' + (index + 1)})));
+  const otherCatalog = [
+    {sport:'Koszykówka',country:'USA',tier:1,league:'NBA',provider:'espn',code:'basketball/nba'},
+    {sport:'Koszykówka',country:'USA',tier:1,league:'WNBA',provider:'espn',code:'basketball/wnba'},
+    {sport:'Koszykówka',country:'USA',tier:2,league:'NCAA',provider:'espn',code:'basketball/mens-college-basketball'},
+    {sport:'Koszykówka',country:'USA',tier:2,league:'NBA G League',provider:'espn',code:'basketball/nba-development'},
+    {sport:'Koszykówka',country:'Polska',tier:1,league:'Orlen Basket Liga',provider:'thesportsdb',providerSport:'Basketball'},
+    {sport:'Koszykówka',country:'Europa',tier:1,league:'Euroliga',provider:'thesportsdb',providerSport:'Basketball'},
+    {sport:'Siatkówka',country:'Polska',tier:1,league:'PlusLiga',provider:'thesportsdb',providerSport:'Volleyball'},
+    {sport:'Siatkówka',country:'Włochy',tier:1,league:'SuperLega',provider:'thesportsdb',providerSport:'Volleyball'},
+    {sport:'Siatkówka',country:'Świat',tier:1,league:'Liga Narodów',provider:'thesportsdb',providerSport:'Volleyball'},
+    {sport:'Piłka ręczna',country:'Polska',tier:1,league:'Superliga Polska',provider:'thesportsdb',providerSport:'Handball'},
+    {sport:'Piłka ręczna',country:'Niemcy',tier:1,league:'Bundesliga',provider:'thesportsdb',providerSport:'Handball'},
+    {sport:'Piłka ręczna',country:'Europa',tier:1,league:'Liga Mistrzów EHF',provider:'thesportsdb',providerSport:'Handball'},
+    {sport:'Esport',country:'Świat',tier:1,league:'Counter-Strike 2',provider:'thesportsdb',providerSport:'Esports'},
+    {sport:'Esport',country:'Świat',tier:1,league:'League of Legends',provider:'thesportsdb',providerSport:'Esports'},
+    {sport:'Esport',country:'Świat',tier:1,league:'Valorant',provider:'thesportsdb',providerSport:'Esports'},
+    {sport:'Formuła 1',country:'Świat',tier:1,league:'Formula 1',provider:'jolpica',code:'f1'},
+    {sport:'Hokej na lodzie',country:'USA',tier:1,league:'NHL',provider:'espn',code:'hockey/nhl'},
+    {sport:'Tenis',country:'Świat',tier:1,league:'ATP',provider:'thesportsdb',providerSport:'Tennis'},
+    {sport:'Narty',country:'Świat',tier:1,league:'Puchar Świata',provider:'thesportsdb',providerSport:'Skiing'}
+  ];
+  catalog.push(...otherCatalog);
   const normalize = value => String(value ?? '').toLowerCase().normalize('NFKD')
     .replace(/[\u0300-\u036f]/g, '').replace(/ł/g, 'l').replace(/ß/g, 'ss').replace(/[^a-z0-9]+/g, ' ').trim();
   const aliases = {
@@ -240,10 +262,122 @@
     }));
     return changed;
   }
+  let otherCatalogPromise=null;
+  const otherCache=new Map();
+  async function cachedJson(keyName,url,ttl=300000){
+    const cached=otherCache.get(keyName);if(cached&&cached.until>Date.now())return cached.data;
+    const data=await withTimeout(url,9000,async response=>{if(!response.ok)throw Error('HTTP '+response.status);return response.json()});
+    otherCache.set(keyName,{until:Date.now()+ttl,data});return data;
+  }
+  const providerSportFor={
+    'koszykowka':'Basketball','siatkowka':'Volleyball','pilka reczna':'Handball',
+    'esport':'Esports','hokej na lodzie':'Ice Hockey','tenis':'Tennis','narty':'Skiing'
+  };
+  async function loadOtherCatalog(providerSport){
+    if(!otherCatalogPromise)otherCatalogPromise=cachedJson('thesportsdb-catalog','https://www.thesportsdb.com/api/v1/json/123/all_leagues.php',600000)
+      .then(json=>{
+        const labels={basketball:'Koszykówka',volleyball:'Siatkówka',handball:'Piłka ręczna',esports:'Esport',
+          'ice hockey':'Hokej na lodzie',tennis:'Tenis',skiing:'Narty'};
+        const rows=(json.leagues||[]).filter(x=>x?.strLeague&&x?.strSport).map(x=>({
+          sport:labels[key(x.strSport)]||x.strSport,country:x.strCountry||'Świat',tier:1,league:x.strLeague,
+          provider:'thesportsdb',providerSport:x.strSport,providerLeagueId:String(x.idLeague||'')
+        }));
+        catalog.push(...rows.filter(r=>!catalog.some(c=>key(c.sport)===key(r.sport)&&key(c.league)===key(r.league))));
+        return rows;
+      }).catch(error=>{otherCatalogPromise=null;throw error});
+    const rows=await otherCatalogPromise;
+    return rows.filter(x=>key(x.providerSport)===key(providerSport));
+  }
+  const espnCode={
+    'NBA':'basketball/nba','WNBA':'basketball/wnba','NCAA':'basketball/mens-college-basketball',
+    'NBA G League':'basketball/nba-development','NHL':'hockey/nhl'
+  };
+  function inCalendarWindow(date,since,until,anyDate){const t=Date.parse(date);return Number.isFinite(t)&&(anyDate||(t>=+since&&t<+until))}
+  function filterOtherRows(rows,{since,until,tz,selectedSport,country,tier,league,term,status,page,anyDate,timedOnly}){
+    const words=normalize(term).split(' ').filter(Boolean),days={},filtered=[];
+    for(const row of rows){
+      if(!row.starts_at||timedOnly&&!row.starts_at)continue;
+      if(!inCalendarWindow(row.starts_at,since,until,anyDate))continue;
+      if(country&&key(row.country)!==key(country))continue;
+      if(tier&&Number(row.tier)!==Number(tier))continue;
+      if(league&&key(row.league)!==key(league))continue;
+      const phase=['live','finished','cancelled','postponed'].includes(row.source_status)?row.source_status:
+        row.score_home!==null&&row.score_away!==null?'finished':Date.parse(row.starts_at)<=Date.now()?'awaiting':'scheduled';
+      if(status&&status!=='all'&&status!==phase)continue;
+      if(!words.every(word=>normalize([row.home,row.away,row.league,row.country].join(' ')).includes(word)))continue;
+      const normalized={...row,sport:selectedSport,display_status:phase};filtered.push(normalized);
+      const day=dayAt(Date.parse(row.starts_at),tz);days[day]=(days[day]||0)+1;
+    }
+    filtered.sort((a,b)=>Date.parse(a.starts_at)-Date.parse(b.starts_at)||a.id.localeCompare(b.id));
+    const offset=Math.max(0,Math.trunc(+page||0))*50;
+    const scoped=catalog.filter(c=>key(c.sport)===key(selectedSport)&&(!country||key(c.country)===key(country))&&(!tier||Number(c.tier)===Number(tier)));
+    return {sourceUrl:'',notice:'Terminarz informacyjny ze źródeł publicznych; bez kursów i bez typowania.',days,total:filtered.length,
+      rows:filtered.slice(offset,offset+50),sports:[...new Set(catalog.map(x=>x.sport))],countries:[...new Set(scoped.map(x=>x.country))],
+      leagues:[...new Set(scoped.map(x=>x.league))],league_catalog:scoped,unavailable:false,partial:false};
+  }
+  async function searchOtherSport(args){
+    const {since,until,tz,selectedSport}=args,sportKey=key(selectedSport),rows=[];let providerError='';
+    if(sportKey==='formula 1'||sportKey==='f1'){
+      const years=new Set([since.getUTCFullYear(),until.getUTCFullYear()]);
+      const schedules=await Promise.allSettled([...years].map(year=>cachedJson('jolpica-f1-'+year,`https://api.jolpi.ca/ergast/f1/${year}.json?limit=100`,3600000)));
+      for(const result of schedules){if(result.status==='rejected'){providerError='Jolpica F1 chwilowo niedostępne.';continue}
+        for(const race of result.value?.MRData?.RaceTable?.Races||[]){
+          const add=(label,session)=>{if(!session?.date)return;const stamp=session.date+'T'+(session.time||'12:00:00Z');rows.push({id:'jolpica:'+race.round+':'+label,sport:selectedSport,country:'Świat',tier:1,league:'Formula 1',home:race.raceName,away:label,starts_at:new Date(stamp).toISOString(),source_provider:'Jolpica',betting_enabled:false,score_home:null,score_away:null})};
+          add('Kwalifikacje',race.Qualifying);add('Sprint',race.Sprint);add('Wyścig',race);
+        }
+      }
+    }else if(sportKey==='koszykowka'||sportKey==='hokej na lodzie'){
+      const entries=catalog.filter(c=>key(c.sport)===sportKey&&c.provider==='espn'&&(!args.league||key(c.league)===key(args.league))&&(!args.country||key(c.country)===key(args.country)));
+      const dateRange=`${since.toISOString().slice(0,10).replaceAll('-','')}-${until.toISOString().slice(0,10).replaceAll('-','')}`;
+      const results=await Promise.allSettled(entries.map(async entry=>{
+        const url=`https://site.api.espn.com/apis/site/v2/sports/${entry.code}/scoreboard?dates=${dateRange}&limit=500`;
+        return {entry,json:await cachedJson('espn:'+entry.code+':'+dateRange,url,120000)};
+      }));
+      for(const result of results){if(result.status==='rejected'){providerError='Publiczny terminarz ESPN chwilowo niedostępny.';continue}
+        const {entry,json}=result.value;
+        for(const event of json.events||[]){const competition=event.competitions?.[0],home=competition?.competitors?.find(c=>c.homeAway==='home'),away=competition?.competitors?.find(c=>c.homeAway==='away');
+          if(!home||!away||!event.date)continue;const ended=event.status?.type?.completed===true;
+          const state=String(event.status?.type?.name||'').toLowerCase();
+          const source_status=event.status?.type?.completed?'finished':/in progress|halftime|live/.test(state)?'live':/postponed/.test(state)?'postponed':/cancel/.test(state)?'cancelled':'scheduled';
+          rows.push({id:'espn:'+entry.code+':'+event.id,sport:selectedSport,country:entry.country,tier:entry.tier,league:entry.league,
+            home:home.team?.displayName||home.team?.name||'Gospodarze',away:away.team?.displayName||away.team?.name||'Goście',starts_at:event.date,
+            source_provider:'ESPN',source_status,betting_enabled:false,score_home:ended&&home.score!=null?Number(home.score):null,score_away:ended&&away.score!=null?Number(away.score):null});
+        }
+      }
+    }else{
+      const providerSport=providerSportFor[sportKey];
+      if(!providerSport)return {sourceUrl:'',notice:'Brak skonfigurowanego publicznego źródła dla tego sportu. Dodaj terminarz do SPORTIVRA przez panel ADMIN.',days:{},total:0,rows:[],sports:[...new Set(catalog.map(x=>x.sport))],countries:[],leagues:[],league_catalog:[],unavailable:true,partial:false};
+      try{
+        const all=await loadOtherCatalog(providerSport);
+        const entries=all.filter(entry=>entry.providerLeagueId&&(!args.country||key(entry.country)===key(args.country))&&(!args.tier||Number(entry.tier)===Number(args.tier))&&(!args.league||key(entry.league)===key(args.league)));
+        if(!entries.length){providerError='Wybrana liga nie występuje w publicznym katalogu dostawcy.';}
+        const eventResults=await Promise.allSettled(entries.slice(0,args.league?3:8).map(async entry=>{
+          if(!entry.providerLeagueId)return {entry,events:[]};
+          const json=await cachedJson('thesportsdb-events:'+entry.providerLeagueId,'https://www.thesportsdb.com/api/v1/json/123/eventsnextleague.php?id='+encodeURIComponent(entry.providerLeagueId),120000);
+          return {entry,events:json.events||[]};
+        }));
+        for(const result of eventResults){if(result.status==='rejected'){providerError='TheSportsDB nie zwrócił danych dla części lig.';continue}
+          const {entry,events}=result.value;for(const event of events){
+            const kickoff=event.strTimestamp||(event.dateEvent&&event.strTime?event.dateEvent+'T'+event.strTime+'Z':event.dateEvent?event.dateEvent+'T12:00:00Z':null);
+            if(!kickoff||!Number.isFinite(Date.parse(kickoff)))continue;
+            const hs=/^\d+$/.test(String(event.intHomeScore??''))?Number(event.intHomeScore):null,as=/^\d+$/.test(String(event.intAwayScore??''))?Number(event.intAwayScore):null;
+            rows.push({id:'thesportsdb:'+event.idEvent,sport:selectedSport,country:entry.country,tier:entry.tier,league:entry.league,
+              home:event.strHomeTeam||event.strEvent||'Wydarzenie',away:event.strAwayTeam||'',starts_at:new Date(kickoff).toISOString(),
+              source_provider:'TheSportsDB',betting_enabled:false,score_home:hs,score_away:as});
+          }
+        }
+      }catch(error){providerError='Publiczny katalog TheSportsDB jest niedostępny: '+(error?.message||String(error));}
+    }
+    const result=filterOtherRows(rows,args);
+    result.notice=providerError?providerError+' Wyświetlam też mecze zapisane przez ADMINA.':result.notice;
+    result.unavailable=!rows.length&&!!providerError;return result;
+  }
   async function search({start, end, tz = 'UTC', sport: selectedSport, country, tier, league, search: term = '', status = 'all', page = 0, anyDate = false, timedOnly = false}) {
     const since = new Date(start), until = new Date(end);
     if (!Number.isFinite(+since) || !Number.isFinite(+until) || until <= since || until - since > 366 * 86400000)
       throw Error('Nieprawidłowy zakres dat terminarza.');
+    if (selectedSport && key(selectedSport) !== key(sport))
+      return searchOtherSport({since,until,tz,selectedSport,country,tier,league,term,status,page,anyDate,timedOnly});
     const startDay = dayAt(since, tz), lastDay = dayAt(+until - 1, tz);
     const years = new Set([seasonYear(startDay), seasonYear(lastDay)]);
     if (anyDate) years.add(seasonYear(startDay) - 1);
