@@ -43,11 +43,13 @@
     return dayFormats.get(zone).format(instant);
   }
   function utcKickoff(day, time, zone) {
-    if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(time || '')) return null;
+    const parts = /^(\d{1,2}):([0-5]\d)(?::([0-5]\d))?$/.exec(String(time || '').trim());
+    if (!parts || Number(parts[1]) > 23) return null;
+    time = parts[1].padStart(2,'0') + ':' + parts[2] + ':' + (parts[3] || '00');
     if (!offsetFormats.has(zone)) offsetFormats.set(zone, new Intl.DateTimeFormat('en', {
       timeZone: zone, timeZoneName: 'shortOffset'
     }));
-    const wall = Date.parse(day + 'T' + time + ':00Z');
+    const wall = Date.parse(day + 'T' + time + 'Z');
     let guess = wall;
     for (let step = 0; step < 2; step++) {
       const name = offsetFormats.get(zone).formatToParts(guess).find(part => part.type === 'timeZoneName').value;
@@ -187,7 +189,58 @@
       return snapshotResult(data, job) || job.result || {pending: true, rows: []};
     });
   }
-  async function search({start, end, tz = 'UTC', sport: selectedSport, country, tier, league, search: term = '', status = 'all', page = 0, anyDate = false}) {
+  const openLigaCodes = {'de.1':'bl1', 'de.2':'bl2', 'de.3':'bl3', 'en.1':'pl'};
+  const openLigaCache = new Map();
+  async function openLiga(entry, year) {
+    const code = openLigaCodes[entry.code];
+    if (!code) return [];
+    const id = code + '/' + year;
+    const previous = openLigaCache.get(id);
+    if (previous && previous.expires > Date.now()) return previous.promise;
+    const item = {expires: Date.now() + 600000};
+    item.promise = withTimeout('https://api.openligadb.de/getmatchdata/' + id, 4000, async response => {
+      if (!response.ok) throw Error('OpenLigaDB HTTP ' + response.status);
+      const rows = await response.json();
+      if (!Array.isArray(rows)) throw Error('Niepoprawne dane OpenLigaDB');
+      return rows.filter(row => row.team1?.teamName && row.team2?.teamName
+        && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(row.matchDateTimeUTC || '')
+        && Number.isFinite(Date.parse(row.matchDateTimeUTC)));
+    }).catch(() => { item.expires = Date.now() + 60000; return []; });
+    openLigaCache.set(id, item);
+    return item.promise;
+  }
+  async function enrichTimes(jobs, results) {
+    const eligible = jobs.filter((job, i) => openLigaCodes[job.entry.code]
+      && results[i].rows.some(row => !row.starts_at));
+    let changed = false;
+    await Promise.all(eligible.map(async job => {
+      const index = jobs.indexOf(job), rows = results[index].rows;
+      const remote = await openLiga(job.entry, job.year);
+      const pair = (home, away) => normalize(home) + '|' + normalize(away);
+      const pairs = new Map(), counts = new Map();
+      for (const item of remote) {
+        const key = pair(item.team1.teamName, item.team2.teamName);
+        pairs.set(key, [...(pairs.get(key) || []), item]);
+      }
+      for (const row of rows) {
+        const key = pair(row.home, row.away);
+        counts.set(key, (counts.get(key) || 0) + 1);
+      }
+      results[index] = {...results[index], rows: rows.map(row => {
+        if (row.starts_at) return row;
+        const key = pair(row.home, row.away), candidates = pairs.get(key) || [];
+        if (counts.get(key) !== 1 || candidates.length !== 1) return row;
+        const candidate = candidates[0];
+        const date = dayAt(Date.parse(candidate.matchDateTimeUTC), job.entry.zone);
+        if (date !== row.date_only) return row;
+        changed = true;
+        return {...row, starts_at: candidate.matchDateTimeUTC, date_only: null,
+          kickoff_source: 'OpenLigaDB (ODbL)'};
+      })};
+    }));
+    return changed;
+  }
+  async function search({start, end, tz = 'UTC', sport: selectedSport, country, tier, league, search: term = '', status = 'all', page = 0, anyDate = false, timedOnly = false}) {
     const since = new Date(start), until = new Date(end);
     if (!Number.isFinite(+since) || !Number.isFinite(+until) || until <= since || until - since > 366 * 86400000)
       throw Error('Nieprawidłowy zakres dat terminarza.');
@@ -212,9 +265,11 @@
       }
     }
     const results = await resultsFor(requests);
+    const extraTimes = await enrichTimes(requests, results);
     const now = Date.now(), today = dayAt(now, tz), days = {}, all = [];
     const words = normalize(term).split(' ').filter(Boolean);
     for (const result of results) for (const row of result.rows) {
+      if (timedOnly && !row.starts_at) continue;
       const day = row.date_only || dayAt(Date.parse(row.starts_at), tz);
       if (!anyDate && (row.date_only
         ? day < startDay || day > lastDay
@@ -237,6 +292,7 @@
     const dates = [...requestedYears].sort().map(labelSeason).join(', ');
     const notice = !selected.length ? 'OpenFootball nie obejmuje wybranych rozgrywek.'
       : 'OpenFootball · sezony ' + dates + '.' +
+        (extraTimes ? ' Część godzin: OpenLigaDB (ODbL), openligadb.de. Terminy mogą się zmienić.' : '') +
         (snapshotDate ? ' Część danych pochodzi z kopii z ' + snapshotDate + '.' : '') +
         (pending ? ' Pozostałe ligi są wczytywane. Lista odświeży się automatycznie.' : '') +
         (failure ? ' Część plików dostawcy jest teraz niedostępna.' : '') +
