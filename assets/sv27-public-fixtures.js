@@ -28,23 +28,11 @@
     {sport:'Koszykówka',country:'USA',tier:1,league:'WNBA',provider:'espn',code:'basketball/wnba'},
     {sport:'Koszykówka',country:'USA',tier:2,league:'NCAA',provider:'espn',code:'basketball/mens-college-basketball'},
     {sport:'Koszykówka',country:'USA',tier:2,league:'NBA G League',provider:'espn',code:'basketball/nba-development'},
-    {sport:'Koszykówka',country:'Polska',tier:1,league:'Orlen Basket Liga',provider:'thesportsdb',providerSport:'Basketball'},
-    {sport:'Koszykówka',country:'Europa',tier:1,league:'Euroliga',provider:'thesportsdb',providerSport:'Basketball'},
-    {sport:'Siatkówka',country:'Polska',tier:1,league:'PlusLiga',provider:'thesportsdb',providerSport:'Volleyball'},
-    {sport:'Siatkówka',country:'Włochy',tier:1,league:'SuperLega',provider:'thesportsdb',providerSport:'Volleyball'},
-    {sport:'Siatkówka',country:'Świat',tier:1,league:'Liga Narodów',provider:'thesportsdb',providerSport:'Volleyball'},
-    {sport:'Piłka ręczna',country:'Polska',tier:1,league:'Superliga Polska',provider:'thesportsdb',providerSport:'Handball'},
-    {sport:'Piłka ręczna',country:'Niemcy',tier:1,league:'Bundesliga',provider:'thesportsdb',providerSport:'Handball'},
-    {sport:'Piłka ręczna',country:'Europa',tier:1,league:'Liga Mistrzów EHF',provider:'thesportsdb',providerSport:'Handball'},
-    {sport:'Esport',country:'Świat',tier:1,league:'Counter-Strike 2',provider:'thesportsdb',providerSport:'Esports'},
-    {sport:'Esport',country:'Świat',tier:1,league:'League of Legends',provider:'thesportsdb',providerSport:'Esports'},
-    {sport:'Esport',country:'Świat',tier:1,league:'Valorant',provider:'thesportsdb',providerSport:'Esports'},
     {sport:'Formuła 1',country:'Świat',tier:1,league:'Formula 1',provider:'jolpica',code:'f1'},
     {sport:'Hokej na lodzie',country:'USA',tier:1,league:'NHL',provider:'espn',code:'hockey/nhl'},
-    {sport:'Tenis',country:'Świat',tier:1,league:'ATP',provider:'thesportsdb',providerSport:'Tennis'},
-    {sport:'Narty',country:'Świat',tier:1,league:'Puchar Świata',provider:'thesportsdb',providerSport:'Skiing'}
   ];
   catalog.push(...otherCatalog);
+  const sports=[sport,'Koszykówka','Siatkówka','Piłka ręczna','Esport','Formuła 1','Hokej na lodzie','Tenis','Narty'];
   const normalize = value => String(value ?? '').toLowerCase().normalize('NFKD')
     .replace(/[\u0300-\u036f]/g, '').replace(/ł/g, 'l').replace(/ß/g, 'ss').replace(/[^a-z0-9]+/g, ' ').trim();
   const aliases = {
@@ -351,7 +339,8 @@
         const all=await loadOtherCatalog(providerSport);
         const entries=all.filter(entry=>entry.providerLeagueId&&(!args.country||key(entry.country)===key(args.country))&&(!args.tier||Number(entry.tier)===Number(args.tier))&&(!args.league||key(entry.league)===key(args.league)));
         if(!entries.length){providerError='Wybrana liga nie występuje w publicznym katalogu dostawcy.';}
-        const eventResults=await Promise.allSettled(entries.slice(0,args.league?3:8).map(async entry=>{
+        const eventLimit=args.allMode?2:8;
+        const eventResults=await Promise.allSettled(entries.slice(0,args.league?3:eventLimit).map(async entry=>{
           if(!entry.providerLeagueId)return {entry,events:[]};
           const json=await cachedJson('thesportsdb-events:'+entry.providerLeagueId,'https://www.thesportsdb.com/api/v1/json/123/eventsnextleague.php?id='+encodeURIComponent(entry.providerLeagueId),120000);
           return {entry,events:json.events||[]};
@@ -372,10 +361,29 @@
     result.notice=providerError?providerError+' Wyświetlam też mecze zapisane przez ADMINA.':result.notice;
     result.unavailable=!rows.length&&!!providerError;return result;
   }
+  async function searchAllSports(args){
+    const since=new Date(args.start),until=new Date(args.end),tz=args.tz||'UTC';
+    const names=sports.filter(name=>name!==sport);
+    const soccer=search({...args,sport,page:0});
+    const others=names.map(selectedSport=>searchOtherSport({...args,term:args.search||'',since,until,tz,selectedSport,page:0,allMode:true}));
+    const settled=await Promise.allSettled([soccer,...others]);
+    const results=settled.filter(x=>x.status==='fulfilled').map(x=>x.value);
+    const failures=settled.filter(x=>x.status==='rejected').map(x=>x.reason?.message||String(x.reason));
+    const all=results.flatMap(x=>x.rows||[]).sort((a,b)=>Date.parse(a.starts_at||a.date_only)-Date.parse(b.starts_at||b.date_only)||String(a.id).localeCompare(String(b.id)));
+    const days={};for(const result of results)for(const [day,count] of Object.entries(result.days||{}))days[day]=(days[day]||0)+Number(count||0);
+    const uniqueCatalog=new Map();for(const entry of catalog)uniqueCatalog.set([key(entry.sport),key(entry.country),key(entry.league)].join('|'),entry);
+    const offset=Math.max(0,Math.trunc(+args.page||0))*50;
+    return {sourceUrl:'',notice:[...new Set(results.map(x=>x.notice).filter(Boolean)),...failures].join(' '),
+      days,total:results.reduce((n,x)=>n+Number(x.total||0),0),rows:all.slice(offset,offset+50),
+      sports,countries:[...new Set([...uniqueCatalog.values()].map(x=>x.country).filter(Boolean))],
+      leagues:[...new Set([...uniqueCatalog.values()].map(x=>x.league).filter(Boolean))],
+      league_catalog:[...uniqueCatalog.values()],unavailable:all.length===0&&results.every(x=>x.unavailable),partial:failures.length>0||results.some(x=>x.partial)};
+  }
   async function search({start, end, tz = 'UTC', sport: selectedSport, country, tier, league, search: term = '', status = 'all', page = 0, anyDate = false, timedOnly = false}) {
     const since = new Date(start), until = new Date(end);
     if (!Number.isFinite(+since) || !Number.isFinite(+until) || until <= since || until - since > 366 * 86400000)
       throw Error('Nieprawidłowy zakres dat terminarza.');
+    if (!selectedSport) return searchAllSports({start,end,tz,country,tier,league,search:term,status,page,anyDate,timedOnly});
     if (selectedSport && key(selectedSport) !== key(sport))
       return searchOtherSport({since,until,tz,selectedSport,country,tier,league,term,status,page,anyDate,timedOnly});
     const startDay = dayAt(since, tz), lastDay = dayAt(+until - 1, tz);
@@ -435,5 +443,5 @@
     return {sourceUrl, notice, days, total: all.length, rows: all.slice(offset, offset + 50),
       unavailable: failure && !supported, partial: failure || missing || pending};
   }
-  window.SV27PublicFixtures = Object.freeze({catalog, search});
+  window.SV27PublicFixtures = Object.freeze({catalog, sports, search});
 })();

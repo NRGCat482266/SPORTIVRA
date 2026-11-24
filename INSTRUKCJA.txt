@@ -1,0 +1,5 @@
+SPORTIVRA GRACZ — TERMINARZ WIELU SPORTÓW
+Wgraj zawartość folderu SPORTIVRA_GRACZ_WSZYSTKIE_SPORTY do głównego katalogu repozytorium strony gracza na GitHubie. Zachowaj folder assets. Głównym plikiem strony jest index.html.
+
+Terminarz łączy zapisane mecze SPORTIVRA z publicznymi źródłami: OpenFootball (piłka nożna), ESPN (NBA/WNBA/NCAA/NHL), Jolpica (F1) oraz TheSportsDB (siatkówka, piłka ręczna, esport, tenis i narciarstwo — jeśli dostawca udostępnia odpowiednią ligę i wydarzenia).
+Publiczne wydarzenia są informacyjne, nie mają kursów i nie włączają obstawiania. Zakres i dostępność zależą od dostawcy; brak danych nie jest zastępowany fikcyjnymi meczami. Nie trzeba instalować dodatkowego SQL dla tej zmiany.

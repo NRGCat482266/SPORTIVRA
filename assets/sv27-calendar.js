@@ -8,11 +8,12 @@
  const unique=items=>[...new Set(items.filter(Boolean))].sort((a,b)=>a.localeCompare(b,'pl'));
  function setOptions(dbData) {
   const publicCatalog=source==='stored'?[]:(publicFeed()?.catalog || []);
+  const publicSports=source==='stored'?[]:(publicFeed()?.sports || []);
   const allCatalog=[...publicCatalog,...(dbData?.league_catalog||[])];
   const sportRows=allCatalog.filter(item=>!state.sport||item.sport===state.sport);
   const tierRows=sportRows.filter(item=>!state.tier||String(item.tier)===state.tier);
   const countryRows=tierRows.filter(item=>!state.country||item.country===state.country);
-  state.sports=unique([...(dbData?.sports||[]),...allCatalog.map(item=>item.sport),state.sport]);
+  state.sports=unique([...(dbData?.sports||[]),...publicSports,...allCatalog.map(item=>item.sport),state.sport]);
   state.countries=unique([...tierRows.map(item=>item.country),state.country]);
   state.leagues=unique([...countryRows.map(item=>item.league),state.league]);
  }
@@ -118,6 +119,16 @@
   }
  }
  function describe(error){return error?.message||String(error)}
+ function fixtureKey(value){return String(value||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/ł/g,'l').replace(/[^a-z0-9]+/g,' ').trim()}
+ function mergeFixtureRows(databaseRows,publicRows){
+  const merged=[...(databaseRows||[])];let duplicates=0;
+  for(const row of publicRows||[]){const home=fixtureKey(row.home),away=fixtureKey(row.away),time=Date.parse(row.starts_at||row.date_only||'');
+   const duplicate=merged.some(old=>{if(String(old.id)===String(row.id))return true;const oldHome=fixtureKey(old.home),oldAway=fixtureKey(old.away),oldTime=Date.parse(old.starts_at||old.date_only||'');return home&&away&&home===oldHome&&away===oldAway&&Number.isFinite(time)&&Number.isFinite(oldTime)&&Math.abs(time-oldTime)<6*60*60*1000});
+   if(duplicate){duplicates++;continue}merged.push(row);
+  }
+  merged.sort((a,b)=>Date.parse(a.starts_at||a.date_only)-Date.parse(b.starts_at||b.date_only)||String(a.id).localeCompare(String(b.id)));
+  return {rows:merged,duplicates};
+ }
  async function load(quiet=false){
   if(!currentRoot)return;
   clearTimeout(searchTimer);searchTimer=null;
@@ -178,7 +189,7 @@
     }
    }
    if(token!==generation)return;
-   if(source==='public'||(source==='auto'&&!result?.total)){
+   if(source==='public'||source==='auto'){
     if(!publicFeed()){
      if(!result)throw Error(problem||'Brakuje pliku sv27-public-fixtures.js na stronie.');
      info+=' Publiczny terminarz jest niedostępny.';
@@ -186,8 +197,19 @@
      const publicResult=await publicFeed().search(query);
      if(!Array.isArray(publicResult?.rows))throw Error('Niepoprawna odpowiedź publicznego terminarza.');
      info=[publicResult.notice||'Publiczny terminarz.',problem&&('Wyszukiwanie w SPORTIVRA niedostępne. '+problem)].filter(Boolean).join(' ');
-     if(publicResult.unavailable && !publicResult.total)throw Error(info);
-     result=publicResult;
+     if(source==='public'){
+      if(publicResult.unavailable&&!publicResult.total)throw Error(info);
+      result=publicResult;catalog=publicResult;
+     }else{
+      const stored=result||{rows:[],total:0,days:{},sports:[],countries:[],leagues:[],league_catalog:[]};
+      if(publicResult.unavailable&&!publicResult.total&&!stored.total)throw Error(info);
+      const combined=mergeFixtureRows(stored.rows,publicResult.rows);
+      const combineCatalog=(a,b)=>[...new Map([...(a||[]),...(b||[])].map(x=>[[x.sport,x.country,x.league].join('|'),x])).values()];
+      catalog={...stored,sports:unique([...(stored.sports||[]),...(publicResult.sports||[])]),countries:unique([...(stored.countries||[]),...(publicResult.countries||[])]),leagues:unique([...(stored.leagues||[]),...(publicResult.leagues||[])]),league_catalog:combineCatalog(stored.league_catalog,publicResult.league_catalog)};
+      const days={...publicResult.days};for(const [day,count] of Object.entries(stored.days||{}))days[day]=Math.max(Number(days[day]||0),Number(count||0));
+      result={...publicResult,rows:combined.rows,total:Math.max(0,Number(stored.total||0)+Number(publicResult.total||0)-combined.duplicates),days};
+      info=stored.total?'Połączono mecze zapisane w SPORTIVRA z publicznymi terminarzami. '+info:info;
+     }
     }
    }
    if(token!==generation)return;
