@@ -1,6 +1,6 @@
 /* SPORTIVRA fixtures retain their ticket IDs. Public schedules are informational. */
 (()=>{'use strict';
- const state={mode:'week',day:new Date(),search:'',sport:'',country:'',tier:'',league:'',status:'all',page:0,total:0,rows:[],sports:[],countries:[],leagues:[],days:{},error:'',loading:false};
+ const state={mode:'week',day:new Date(),search:'',sport:'',country:'',tier:'',league:'',session:'',status:'all',page:0,total:0,rows:[],sports:[],countries:[],leagues:[],days:{},error:'',loading:false};
  let generation=0,timer=null,searchTimer=null,channel=null,currentRoot=null;
  let pending=false,source='auto',rangeOnly=false,timedOnly=false,notice='',catalog=null,lastResult='',activeRequest=null;
  const publicFeed=()=>window.SV27PublicFixtures;
@@ -48,18 +48,25 @@
   const search=el('input');search.id='sv27-cal-search';search.type='search';search.maxLength=100;search.placeholder='Drużyna, zawodnik lub liga';search.value=state.search;search.setAttribute('aria-label','Szukaj drużyny, zawodnika lub ligi');search.enterKeyHint='search';
   search.addEventListener('input',()=>{state.search=search.value;state.page=0;clearTimeout(searchTimer);searchTimer=setTimeout(()=>{searchTimer=null;load()},350)});
   search.addEventListener('keydown',event=>{if(event.key==='Enter'&&!event.isComposing){event.preventDefault();load()}});
+  const activeSport=canonicalSportForUi(state.sport);
+  search.placeholder=activeSport==='Formuła 1'?'Grand Prix lub sesja':'Drużyna, zawodnik lub liga';
   filters.append(search);
-  filters.append(select('Sport',state.sport,state.sports,'Wszystkie sporty',v=>{state.sport=v;state.country='';state.tier='';state.league='';state.page=0;load()}));
-  const tier=el('select');tier.setAttribute('aria-label','Poziom ligi');tier.append(option('','Wszystkie poziomy'),option('1','Liga 1'),option('2','Liga 2'),option('3','Liga 3'));tier.value=state.tier;tier.addEventListener('change',()=>{state.tier=tier.value;state.league='';state.page=0;load()});filters.append(tier);
-  filters.append(select('Kraj',state.country,state.countries,'Wszystkie kraje',v=>{state.country=v;state.league='';state.page=0;load()}));
-  filters.append(select('Liga',state.league,state.leagues,'Wszystkie ligi',v=>{state.league=v;state.page=0;load()}));
+  filters.append(select('Sport',state.sport,state.sports,'Wszystkie sporty',v=>{state.sport=v;state.country='';state.tier='';state.league='';state.session='';state.page=0;load()}));
+  if(!state.sport||['Piłka nożna','Koszykówka'].includes(activeSport)){
+   const tier=el('select');tier.setAttribute('aria-label','Poziom ligi');tier.append(option('','Wszystkie poziomy'),option('1','Liga 1'),option('2','Liga 2'),option('3','Liga 3'));tier.value=state.tier;tier.addEventListener('change',()=>{state.tier=tier.value;state.league='';state.page=0;load()});filters.append(tier);
+  }
+  if(activeSport!=='Formuła 1'&&state.countries.length)filters.append(select('Kraj',state.country,state.countries,'Wszystkie kraje',v=>{state.country=v;state.league='';state.page=0;load()}));
+  if(activeSport!=='Formuła 1'&&state.leagues.length)filters.append(select('Liga',state.league,state.leagues,'Wszystkie ligi',v=>{state.league=v;state.page=0;load()}));
+  if(activeSport==='Formuła 1'){
+   const session=el('select');session.setAttribute('aria-label','Sesja F1');session.append(option('','Wszystkie sesje'),option('Kwalifikacje','Kwalifikacje'),option('Sprint','Sprint'),option('Wyścig','Wyścig'));session.value=state.session;session.addEventListener('change',()=>{state.session=session.value;state.page=0;load()});filters.append(session);
+  }
   const status=el('select');status.setAttribute('aria-label','Status');status.append(option('all','Wszystkie statusy'));for(const [key,value] of Object.entries(statuses))status.append(option(key,value));status.value=state.status;status.addEventListener('change',()=>{state.status=status.value;state.page=0;load()});filters.append(status);root.append(filters);
   const sourceSelect=el('select');sourceSelect.setAttribute('aria-label','Źródło meczów');
   for(const [key,label] of [['auto','Automatyczny wybór źródła'],['stored','Mecze SPORTIVRA'],['public','Publiczny terminarz']])sourceSelect.append(option(key,label));
   sourceSelect.value=source;sourceSelect.onchange=()=>{source=sourceSelect.value;state.page=0;load()};filters.append(sourceSelect);
-  if(state.sport||state.country||state.tier||state.league||state.search||state.status!=='all'||source!=='auto'||rangeOnly||timedOnly){
+  if(state.sport||state.country||state.tier||state.league||state.session||state.search||state.status!=='all'||source!=='auto'||rangeOnly||timedOnly){
    filters.append(button('Wyczyść filtry',()=>{
-    Object.assign(state,{sport:'',country:'',tier:'',league:'',search:'',status:'all',page:0});
+    Object.assign(state,{sport:'',country:'',tier:'',league:'',session:'',search:'',status:'all',page:0});
     rangeOnly=false;timedOnly=false;source='auto';load();
    }));
   }
@@ -122,6 +129,7 @@
  }
  function describe(error){return error?.message||String(error)}
  function fixtureKey(value){return String(value||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/ł/g,'l').replace(/[^a-z0-9]+/g,' ').trim()}
+ function canonicalSportForUi(value){const key=fixtureKey(value);const map={soccer:'Piłka nożna',football:'Piłka nożna','pilka nozna':'Piłka nożna',basketball:'Koszykówka','koszykowka':'Koszykówka',volleyball:'Siatkówka','siatkowka':'Siatkówka',handball:'Piłka ręczna','pilka reczna':'Piłka ręczna',esports:'Esport',esport:'Esport','formula 1':'Formuła 1',f1:'Formuła 1',tennis:'Tenis',tenis:'Tenis',skiing:'Narty',narty:'Narty'};return map[key]||''}
  function mergeFixtureRows(databaseRows,publicRows){
   const merged=[...(databaseRows||[])];let duplicates=0;
   for(const row of publicRows||[]){const home=fixtureKey(row.home),away=fixtureKey(row.away),time=Date.parse(row.starts_at||row.date_only||'');
@@ -143,7 +151,7 @@
   }
   const {start,end}=span();
   const query={start:start.toISOString(),end:end.toISOString(),sport:state.sport,country:state.country,
-   tier:state.tier,league:state.league,search:state.search.trim(),status:state.status,
+   tier:state.tier,league:state.league,session:state.session,search:state.search.trim(),status:state.status,
    timedOnly,anyDate:allDates(),tz:Intl.DateTimeFormat().resolvedOptions().timeZone||'UTC',page:state.page};
   let problem='',result=null,info='',providerStatus='';
   try{
@@ -218,6 +226,7 @@
     }
    }
    if(token!==generation)return;
+   if(query.session){const rows=(result.rows||[]).filter(row=>(row.session||row.away)===query.session);result={...result,rows,total:rows.length}}
    setOptions(source==='public'?null:catalog);
    state.rows=result.rows;state.total=Number(result.total)||0;state.days=result.days||{};state.error='';
    notice=[info,providerStatus].filter(Boolean).join(' ');

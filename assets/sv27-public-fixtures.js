@@ -279,7 +279,7 @@
     'NBA G League':'basketball/nba-development'
   };
   function inCalendarWindow(date,since,until,anyDate){const t=Date.parse(date);return Number.isFinite(t)&&(anyDate||(t>=+since&&t<+until))}
-  function filterOtherRows(rows,{since,until,tz,selectedSport,country,tier,league,term,status,page,anyDate,timedOnly}){
+  function filterOtherRows(rows,{since,until,tz,selectedSport,country,tier,league,session,term,status,page,anyDate,timedOnly}){
     const words=normalize(term).split(' ').filter(Boolean),days={},filtered=[];
     for(const row of rows){
       if(timedOnly&&!row.starts_at)continue;
@@ -288,10 +288,11 @@
       if(country&&key(row.country)!==key(country))continue;
       if(tier&&Number(row.tier)!==Number(tier))continue;
       if(league&&key(row.league)!==key(league))continue;
+      if(session&&(row.session||row.away)!==session)continue;
       const phase=['live','finished','cancelled','postponed'].includes(row.source_status)?row.source_status:
         row.score_home!==null&&row.score_away!==null?'finished':Date.parse(eventDate)<=Date.now()?'awaiting':'scheduled';
       if(status&&status!=='all'&&status!==phase)continue;
-      if(!words.every(word=>normalize([row.home,row.away,row.league,row.country].join(' ')).includes(word)))continue;
+      if(!words.every(word=>normalize([row.home,row.away,row.league,row.country,row.session].join(' ')).includes(word)))continue;
       const normalized={...row,sport:selectedSport,display_status:phase};filtered.push(normalized);
       const day=row.date_only||dayAt(Date.parse(row.starts_at),tz);days[day]=(days[day]||0)+1;
     }
@@ -309,7 +310,7 @@
       const schedules=await Promise.allSettled([...years].map(year=>cachedJson('jolpica-f1-'+year,`https://api.jolpi.ca/ergast/f1/${year}.json?limit=100`,3600000)));
       for(const result of schedules){if(result.status==='rejected'){providerError='Jolpica F1 chwilowo niedostępne.';continue}
         for(const race of result.value?.MRData?.RaceTable?.Races||[]){
-          const add=(label,session)=>{if(!session?.date)return;const stamp=session.date+'T'+(session.time||'12:00:00Z');rows.push({id:'jolpica:'+race.round+':'+label,sport:selectedSport,country:'Świat',tier:1,league:'Formula 1',home:race.raceName,away:label,starts_at:new Date(stamp).toISOString(),source_provider:'Jolpica',betting_enabled:false,score_home:null,score_away:null})};
+          const add=(label,session)=>{if(!session?.date)return;const stamp=session.time?new Date(session.date+'T'+session.time).toISOString():null;rows.push({id:'jolpica:'+race.round+':'+label,sport:selectedSport,country:'Świat',tier:1,league:'Formula 1',home:race.raceName,away:label,session:label,starts_at:stamp,date_only:stamp?null:session.date,source_provider:'Jolpica',betting_enabled:false,score_home:null,score_away:null})};
           add('Kwalifikacje',race.Qualifying);add('Sprint',race.Sprint);add('Wyścig',race);
         }
       }
@@ -340,7 +341,7 @@
         const all=await loadOtherCatalog(providerSport);
         const entries=all.filter(entry=>entry.providerLeagueId&&(!args.country||key(entry.country)===key(args.country))&&(!args.tier||Number(entry.tier)===Number(args.tier))&&(!args.league||key(entry.league)===key(args.league)));
         if(!entries.length){providerError='Wybrana liga nie występuje w publicznym katalogu dostawcy.';}
-        const eventLimit=args.allMode?2:18;
+        const eventLimit=args.allMode?4:30;
         const eventResults=await Promise.allSettled(entries.slice(0,args.league?3:eventLimit).map(async entry=>{
           if(!entry.providerLeagueId)return {entry,events:[]};
           const seasonYear=since.getUTCFullYear(),season=seasonYear+'-'+(seasonYear+1);
@@ -384,13 +385,13 @@
       leagues:[...new Set([...uniqueCatalog.values()].map(x=>x.league).filter(Boolean))],
       league_catalog:[...uniqueCatalog.values()],unavailable:all.length===0&&results.every(x=>x.unavailable),partial:failures.length>0||results.some(x=>x.partial)};
   }
-  async function search({start, end, tz = 'UTC', sport: selectedSport, country, tier, league, search: term = '', status = 'all', page = 0, anyDate = false, timedOnly = false}) {
+  async function search({start, end, tz = 'UTC', sport: selectedSport, country, tier, league, session, search: term = '', status = 'all', page = 0, anyDate = false, timedOnly = false}) {
     const since = new Date(start), until = new Date(end);
     if (!Number.isFinite(+since) || !Number.isFinite(+until) || until <= since || until - since > 366 * 86400000)
       throw Error('Nieprawidłowy zakres dat terminarza.');
-    if (!selectedSport) return searchAllSports({start,end,tz,country,tier,league,search:term,status,page,anyDate,timedOnly});
+    if (!selectedSport) return searchAllSports({start,end,tz,country,tier,league,session,search:term,status,page,anyDate,timedOnly});
     if (selectedSport && key(selectedSport) !== key(sport))
-      return searchOtherSport({since,until,tz,selectedSport,country,tier,league,term,status,page,anyDate,timedOnly});
+      return searchOtherSport({since,until,tz,selectedSport,country,tier,league,session,term,status,page,anyDate,timedOnly});
     const startDay = dayAt(since, tz), lastDay = dayAt(+until - 1, tz);
     const years = new Set([seasonYear(startDay), seasonYear(lastDay)]);
     if (anyDate) years.add(seasonYear(startDay) - 1);
