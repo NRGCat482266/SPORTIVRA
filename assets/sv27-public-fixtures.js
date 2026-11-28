@@ -31,7 +31,9 @@
     {sport:'Formuła 1',country:'Świat',tier:1,league:'Formula 1',provider:'jolpica',code:'f1'},
   ];
   catalog.push(...otherCatalog);
-  const sports=[sport,'Koszykówka','Siatkówka','Piłka ręczna','Esport','Formuła 1','Tenis','Narty'];
+  // Public feeds with an implemented schedule: OpenFootball, ESPN and Jolpica.
+  // Unsupported TheSportsDB-only sports are omitted from the player selectors.
+  const sports=[sport,'Koszykówka','Formuła 1'];
   const normalize = value => String(value ?? '').toLowerCase().normalize('NFKD')
     .replace(/[\u0300-\u036f]/g, '').replace(/ł/g, 'l').replace(/ß/g, 'ss').replace(/[^a-z0-9]+/g, ' ').trim();
   const aliases = {
@@ -291,6 +293,11 @@
       if(session&&(row.session||row.away)!==session)continue;
       const phase=['live','finished','cancelled','postponed'].includes(row.source_status)?row.source_status:
         row.score_home!==null&&row.score_away!==null?'finished':Date.parse(eventDate)<=Date.now()?'awaiting':'scheduled';
+      const eventTime=Date.parse(eventDate),today=dayAt(Date.now(),tz);
+      const datePassed=row.starts_at
+        ? Number.isFinite(eventTime)&&eventTime<=Date.now()
+        : !!row.date_only&&row.date_only<today;
+      if(phase!=='live'&&(phase==='finished'||datePassed))continue;
       if(status&&status!=='all'&&status!==phase)continue;
       if(!words.every(word=>normalize([row.home,row.away,row.league,row.country,row.session].join(' ')).includes(word)))continue;
       const normalized={...row,sport:selectedSport,display_status:phase};filtered.push(normalized);
@@ -311,7 +318,7 @@
       for(const result of schedules){if(result.status==='rejected'){providerError='Jolpica F1 chwilowo niedostępne.';continue}
         for(const race of result.value?.MRData?.RaceTable?.Races||[]){
           const add=(label,session)=>{if(!session?.date)return;const stamp=session.time?new Date(session.date+'T'+session.time).toISOString():null;rows.push({id:'jolpica:'+race.round+':'+label,sport:selectedSport,country:'Świat',tier:1,league:'Formula 1',home:race.raceName,away:label,session:label,starts_at:stamp,date_only:stamp?null:session.date,source_provider:'Jolpica',betting_enabled:false,score_home:null,score_away:null})};
-          add('Kwalifikacje',race.Qualifying);add('Sprint',race.Sprint);add('Wyścig',race);
+          add('Wyścig',race);
         }
       }
     }else if(sportKey==='koszykowka'){
@@ -424,6 +431,7 @@
         : Date.parse(row.starts_at) < +since || Date.parse(row.starts_at) >= +until)) continue;
       const elapsed = row.starts_at ? Date.parse(row.starts_at) <= now : day < today;
       const phase = row.score_home !== null ? 'finished' : elapsed ? 'awaiting' : 'scheduled';
+      if(phase!=='live'&&(phase==='finished'||elapsed))continue;
       if (status && status !== 'all' && status !== phase) continue;
       const haystack = normalize([row.home, row.away, row.league, row.country].join(' '));
       if (!words.every(word => haystack.includes(word))) continue;
